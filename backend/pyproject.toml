@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "silicolab"
+version = "0.1.3"
+description = "SilicoLab local scientific workbench"
+requires-python = ">=3.10"
+dependencies = [
+  "fastapi>=0.115,<1.0",
+  "uvicorn>=0.34,<1.0",
+  "httpx>=0.28,<1.0",
+  "openpyxl>=3.1.5,<4.0",
+]
+
+[project.optional-dependencies]
+desktop = [
+  "pywebview==6.2.1",
+  "pyinstaller==6.22.3",
+  "certifi>=2026.10.23",
+  "dmgbuild==1.6.7",
+  "pillow>=12,<14",
+]
+test = ["playwright>=1.50,<2"]
+
+[project.scripts]
+silicolab = "silicolab.launcher:main"
+silicolab-codon = "silicolab.features.codon.client:main"
+silicolab-codon-local = "silicolab.features.codon.local:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"silicolab.features.codon" = ["resources/*.json", "resources/*.xlsx"]

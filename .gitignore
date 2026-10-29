@@ -1,0 +1,62 @@
+# Local research and private inputs
+/research/
+/private-inputs/
+/example-chart/
+
+# Runtime data, exports, logs and test output
+/data/
+/outputs/
+*.log
+*.pid
+playwright-report/
+test-results/
+
+# Python environments, caches and package metadata
+/.venv/
+/.desktop-venv/
+/venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Frontend dependencies and generated files
+/frontend/node_modules/
+/frontend/dist/
+*.tsbuildinfo
+
+# Build intermediates and release bundles
+/build/
+/release/
+/backend/build/
+/backend/dist/
+
+# SQLite databases and auxiliary files, even outside data/
+*.sqlite
+*.sqlite3
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite-journal
+*.sqlite3-wal
+*.sqlite3-shm
+*.sqlite3-journal
+
+# Local environment configuration; sanitized examples may be committed
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# macOS and editor temporary files
+.DS_Store
+._*
+.idea/
+*.swp
+*.swo
+*~
+~$*

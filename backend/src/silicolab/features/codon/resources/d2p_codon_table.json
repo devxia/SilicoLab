@@ -1,0 +1,111 @@
+{
+  "schema": 1,
+  "method": "most-observed codon per amino acid, baseline training only",
+  "training_probes": [
+    "core_repeat_1",
+    "core_repeat_2",
+    "core_repeat_3",
+    "core_repeat_4",
+    "core_rename_1",
+    "core_rename_2",
+    "core_reverse",
+    "blocks",
+    "core_no_stop",
+    "core_no_prefix",
+    "point_reference",
+    "point_mutant",
+    "train_random_1",
+    "train_random_2",
+    "short_all",
+    "long_repeat"
+  ],
+  "mapping": {
+    "*": "TAA",
+    "A": "GCT",
+    "C": "TGT",
+    "D": "GAC",
+    "E": "GAA",
+    "F": "TTC",
+    "G": "GGT",
+    "H": "CAC",
+    "I": "ATC",
+    "K": "AAG",
+    "L": "TTG",
+    "M": "ATG",
+    "N": "AAC",
+    "P": "CCA",
+    "Q": "CAA",
+    "R": "AGA",
+    "S": "TCT",
+    "T": "ACC",
+    "V": "GTT",
+    "W": "TGG",
+    "Y": "TAC"
+  },
+  "training_counts": {
+    "*": {
+      "TAA": 14
+    },
+    "A": {
+      "GCT": 60
+    },
+    "C": {
+      "TGT": 65
+    },
+    "D": {
+      "GAC": 60
+    },
+    "E": {
+      "GAA": 69
+    },
+    "F": {
+      "TTC": 71
+    },
+    "G": {
+      "GGT": 67
+    },
+    "H": {
+      "CAC": 60
+    },
+    "I": {
+      "ATC": 67
+    },
+    "K": {
+      "AAG": 69
+    },
+    "L": {
+      "TTG": 62
+    },
+    "M": {
+      "ATG": 84
+    },
+    "N": {
+      "AAC": 65
+    },
+    "P": {
+      "CCA": 64
+    },
+    "Q": {
+      "CAA": 77
+    },
+    "R": {
+      "AGA": 64
+    },
+    "S": {
+      "TCT": 66
+    },
+    "T": {
+      "ACC": 67
+    },
+    "V": {
+      "GTT": 75
+    },
+    "W": {
+      "TGG": 67
+    },
+    "Y": {
+      "TAC": 73
+    }
+  },
+  "all_training_choices_unanimous": true
+}

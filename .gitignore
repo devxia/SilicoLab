@@ -4,6 +4,7 @@
 /example-chart/
 
 # Runtime data, exports, logs and test output
+.silicolab/
 /data/
 /outputs/
 *.log

@@ -1,0 +1,13 @@
+export type Conversation = { id: string; title: string; draft: string; revision: number };
+export type ProjectIndex = { id: string; name: string; path: string };
+export type Project = ProjectIndex & { conversations: Conversation[]; tasks: unknown[]; scheduling: string; modelRequests: number };
+
+export async function request<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
+  const response = await fetch(`/api/workbench${path}`, {
+    method, headers: { 'Content-Type': 'application/json' },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(typeof data.detail === 'string' ? data.detail : '操作未完成，请检查输入后重试');
+  return data;
+}

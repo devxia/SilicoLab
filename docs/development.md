@@ -8,6 +8,7 @@
 python3 -m venv .venv
 .venv/bin/python -m pip install -e "./backend[test]"
 npm --prefix frontend ci
+npm --prefix runtime ci --ignore-scripts --no-audit --no-fund
 ```
 
 Python 的正式依赖和 desktop/test 可选依赖集中在 `backend/pyproject.toml`；requirements 文件是从根目录执行的便捷安装入口。前端配置与锁文件位于 `frontend/`。虚拟环境保留在根目录。
@@ -22,6 +23,22 @@ npm --prefix frontend run build
 .venv/bin/python -m silicolab
 .venv/bin/python -m silicolab --stop
 ```
+
+## 项目与对话工作台
+
+默认入口为项目工作台，浏览器可输入已有目录路径，macOS 源码应用也可通过本机目录选择器选择。创建后可新建多个对话、保存草稿并重开；目录需真实存在，打开已有项目不会创建空替代目录。项目记录位于选定目录 `.silicolab/session.sqlite`，应用索引位于应用数据库旁的 `projects.json`。只打开项目不调用模型。
+
+正式 Node 宿主位于 `runtime/`，精确锁定 pi-durable/pi-ai/chord 1.4.0；要求 Node 24.16.0，使用同一 Node 的原生 TypeScript 擦除。源码安装支持 `SILICOLAB_NODE` 指定 Node 可执行文件，`SILICOLAB_RUNTIME` 指定运行时目录；分发包仍需独立验收，不能依赖开发机路径。手动专项入口为 `/#manual`，保留原有操作与接口。
+
+```bash
+npm --prefix runtime run typecheck
+.venv/bin/python -B -m unittest discover -s backend/tests -p test_workbench.py -v
+# 临时工作台夹具与浏览器验收，两个终端运行
+.venv/bin/python -B tests/e2e/fixtures/workbench_fixture.py
+.venv/bin/python -B tests/e2e/browser_workbench.py
+```
+
+浏览器验收覆盖真实项目持久化、多个对话、草稿、A+C 布局联动、窄窗口导航及手动专项入口。截图和 JSON 证据保存在被忽略的 `outputs/ui/workbench/`。领域语言见根 GLOSSARY，工程决定见 `docs/adr/`。
 
 ## 常规检查
 

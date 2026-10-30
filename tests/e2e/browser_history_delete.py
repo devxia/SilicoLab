@@ -38,7 +38,7 @@ with sync_playwright() as p:
     page.on('pageerror', lambda error: errors.append(str(error)))
     jobs = {name: make_job(page, name) for name in ['保留任务', '单条删除', '分组甲', '分组乙', '当前结果', '状态冲突']}
     row = lambda name: page.locator(f'.history-row[data-job-id="{jobs[name]}"]')
-    page.goto(URL, wait_until='networkidle')
+    page.goto(URL + '/#manual', wait_until='networkidle')
     page.get_by_role('button', name='历史记录', exact=True).click()
     expect(page.locator('.history-row[data-job-id]')).to_have_count(6)
     # Single delete cancellation, then confirmed removal; already exported file stays.

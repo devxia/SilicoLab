@@ -2,11 +2,16 @@
 
 ## 调用关系
 
-React 界面通过本机 HTTP 与 FastAPI 通信，FastAPI 将任务和结果写入 SQLite；任务队列显式选择 ProteinFactory 远端计算或本地实验引擎。原生应用复用同一界面和后端，另提供草稿、剪贴板、导出与打开下载目录的五个桥接方法。
+React 项目工作台通过本机 HTTP 的 workbench 契约与 Python 应用模块通信，再以私有 JSONL 连接每项目单一 Node/pi-durable 宿主。项目对话和草稿保存在用户选定目录的 SQLite 中；打开和检视不启动模型调度。应用级项目索引只保留定位，不代替项目记录。
+
+原手动专项工作台仍通过 HTTP 与 FastAPI 科学模块通信，任务队列显式选择 ProteinFactory 远端或本地实验引擎，其已有数据库不迁移到项目对话中。原生应用另提供目录选择、草稿、剪贴板、导出与打开下载目录的受信桥接方法。
 
 ## 正式代码
 
 - `backend/src/silicolab/branding.py`：名称、版本与 Bundle ID。
+- `workbench.py`：项目生命周期、跨进程所有者、Node 子进程和工作台契约。
+- `runtime/src/host.ts`：真实持久化内核的项目与对话文档、草稿版本冲突检查；只经应用契约使用。
+- `frontend/src/workbench/`：项目对话主界面及 A+C 导航与分析区联动。
 - `server.py`：请求处理、任务状态、串行队列、事务存储、摘要索引与 SSE。
 - `paths.py`：项目数据、原生应用数据和前端静态资源位置。
 - `launcher.py` / `__main__.py`：浏览器启动和停止入口。

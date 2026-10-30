@@ -348,6 +348,8 @@ def create_app(db_path=None, optimizer=None, delay=0.5):
     database = db_path or browser_database()
     store = Store(database)
     worker = Worker(store, optimizer or default_optimizer, delay)
+    from silicolab.workbench import Workbench, router as workbench_router
+    workbench = Workbench(Path(database).with_name('projects.json'))
 
     @asynccontextmanager
     async def lifespan(app):
@@ -360,11 +362,14 @@ def create_app(db_path=None, optimizer=None, delay=0.5):
             await task
         except asyncio.CancelledError:
             pass
+        workbench.close()
 
     app = FastAPI(title=APP_NAME, version=APP_VERSION, lifespan=lifespan)
     app.state.store = store
     app.state.worker = worker
     app.state.stopping = asyncio.Event()
+    app.state.workbench = workbench
+    app.include_router(workbench_router(workbench))
 
     @app.middleware("http")
     async def local_only(request: Request, call_next):

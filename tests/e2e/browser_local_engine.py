@@ -17,7 +17,7 @@ with sync_playwright() as p:
     errors = []
     page.on('pageerror', lambda error: errors.append(str(error)))
     page.on('request', lambda request: external_requests.append(request.url) if not request.url.startswith(URL) else None)
-    page.goto(URL, wait_until='networkidle')
+    page.goto(URL + '/#manual', wait_until='networkidle')
     expect(page.get_by_role('radio', name='ProteinFactory 远端', exact=True)).to_be_checked()
     page.get_by_label('目标宿主', exact=True).select_option('Escherichia_coli')
     page.get_by_role('radio', name='本地实验', exact=True).check()

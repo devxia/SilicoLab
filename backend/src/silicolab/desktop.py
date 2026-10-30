@@ -33,7 +33,7 @@ class DesktopBridge:
         self._last_draft_write = time.monotonic()
 
     def _trusted(self):
-        if self._window is None or self._window.get_current_url().split("?", 1)[0].rstrip("/") != self._origin:
+        if self._window is None or self._window.get_current_url().split("#", 1)[0].split("?", 1)[0].rstrip("/") != self._origin:
             raise ValueError("此页面无法使用本机功能")
 
     def bootstrap(self):
@@ -44,6 +44,11 @@ class DesktopBridge:
         except (OSError, ValueError):
             draft = None
         return {"desktop": True, "draft": draft}
+
+    def choose_project_directory(self):
+        self._trusted()
+        selected = self._window.create_file_dialog(webview.FOLDER_DIALOG, allow_multiple=False)
+        return str(Path(selected[0]).resolve()) if selected else None
 
     def save_draft(self, draft):
         self._trusted()

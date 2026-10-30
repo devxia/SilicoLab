@@ -17,7 +17,7 @@ with tempfile.TemporaryDirectory() as directory, sync_playwright() as p:
     page = browser.new_page(viewport={'width': 1440, 'height': 1060})
     errors = []
     page.on('pageerror', lambda error: errors.append(str(error)))
-    page.goto(URL, wait_until='networkidle')
+    page.goto(URL + '/#manual', wait_until='networkidle')
     page.get_by_role('tab', name='导入表格', exact=True).click()
     original = Path(directory) / 'synthetic-input.xlsx'
     sample = Workbook()

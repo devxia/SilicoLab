@@ -23,7 +23,7 @@ with sync_playwright() as p:
     page.on('pageerror', lambda error: errors.append(str(error)))
     page.on('response', lambda response: bad_responses.append((response.status, response.url))
             if response.status >= 400 else None)
-    page.goto(URL, wait_until='networkidle')
+    page.goto(URL + '/#manual', wait_until='networkidle')
     expect(page.get_by_role('heading', name='密码子优化', exact=True)).to_be_visible()
     page.screenshot(path=str(ARTIFACTS / 'workspace.png'), full_page=True)
     page.get_by_label('氨基酸序列', exact=True).fill('MKX')

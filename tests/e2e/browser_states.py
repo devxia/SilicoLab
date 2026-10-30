@@ -7,7 +7,7 @@ with sync_playwright() as p:
     page = browser.new_page(viewport={'width': 1440, 'height': 1000})
     errors = []
     page.on('pageerror', lambda error: errors.append(str(error)))
-    page.goto('http://127.0.0.1:8766', wait_until='networkidle')
+    page.goto('http://127.0.0.1:8766/#manual', wait_until='networkidle')
     page.get_by_label('任务名称').fill('Retry test')
     page.get_by_label('氨基酸序列', exact=True).fill('>fail-once\nMK\n>success\nMK*')
     page.get_by_role('button', name='开始优化', exact=False).click()

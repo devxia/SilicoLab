@@ -11,6 +11,9 @@ SilicoLab 是面向多种科研功能的本地软件，当前已实现密码子�
 
 ## 当前功能
 
+- 项目工作台：用户选定目录、多个对话、草稿保存与重开；项目记录由真实 Node/pi-durable 宿主持久化，打开项目不触发模型。按需右侧工作区与可展开图标导航联动；原专项工作台从侧栏进入，或访问 `/#manual`。
+- 项目工作台源码运行需要 Node 24.16.0 和 `runtime/` 锁定依赖；当前尚未交付真实模型、科学智能体任务或新版后台分发能力。
+
 - 单条蛋白、多条 FASTA、文件拖入与输入校验；末尾 `*` 提示和补充选项。
 - XLSX / CSV / TSV 导入，支持工作表、表头、起始行和名称/序列列映射。
 - ProteinFactory 远端计算，以及仅支持 D2P 默认体系的本地实验引擎。
@@ -30,6 +33,7 @@ Excel 导出仅包含“基因合成”工作表，列为“序号、合成名�
 python3 -m venv .venv
 .venv/bin/python -m pip install -e "./backend[test]"
 npm --prefix frontend ci
+npm --prefix runtime ci --ignore-scripts --no-audit --no-fund
 npm --prefix frontend run build
 .venv/bin/python -m silicolab
 ```
@@ -60,7 +64,8 @@ bash packaging/macos/build.sh
 
 | 目录 | 职责 |
 |---|---|
-| `backend/` | Python 包、功能实现、后端测试与必要资源 |
+| `backend/` | Python 包、应用契约、科学功能、后端测试与必要资源 |
+| `runtime/` | 项目持有的 Node/pi-durable 宿主与固定依赖 |
 | `frontend/` | React 界面、前端测试、字体和构建配置 |
 | `packaging/macos/` | 原生入口、打包脚本、图标与 DMG 布局 |
 | `tests/e2e/` | 浏览器与打包应用的端到端验证 |

@@ -195,6 +195,8 @@ class Workbench:
                 host = None
             fresh = host is None
             if fresh:
+                if len(self._hosts) >= 4:
+                    raise ValueError('当前最多打开4个项目宿主；请结束并重新打开应用选择项目')
                 host = ProjectHost(canonical, create, name)
                 self._hosts[canonical] = host
             try:
@@ -229,17 +231,21 @@ class Workbench:
             item = next((p for p in self._projects if p['id'] == project_id), None)
             if item is None:
                 raise ValueError('项目不存在')
-            self.open(item['path'], expected_id=project_id)
             canonical = str(Path(item['path']).resolve())
-            host = self._hosts[canonical]
-            result = host.call(op, **values)
-            if op == 'task.pause' and result.get('pausedHost'):
-                # The kernel acknowledged close; join Node and the application-owned science supervisor.
+            host = self._hosts.get(canonical)
+        if host is None or not host.alive():
+            self.open(item['path'], expected_id=project_id)
+            with self._lock:
+                host = self._hosts[canonical]
+        # Each host owns its IPC lock. Long operations in A must not serialize B.
+        result = host.call(op, **values)
+        if op == 'task.pause' and result.get('pausedHost'):
+            with self._lock:
                 host.close()
-                del self._hosts[canonical]
+                self._hosts.pop(canonical, None)
                 snapshot = self.open(item['path'], expected_id=project_id)
                 return next(task for task in snapshot['tasks'] if task['id'] == values['taskId'])
-            return {**result, 'path': item['path']} if op == 'status' else result
+        return {**result, 'path': item['path']} if op == 'status' else result
 
     def close(self):
         with self._lock:

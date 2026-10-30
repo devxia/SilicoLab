@@ -43,7 +43,7 @@ await agent.reconcileOpen();
 async function snapshot() {
   const project = (await harness.snapshot(Project, ctx))!;
   const conversations = await Promise.all(project.conversations.map(async (id) => ({ id: String(id), ...(await harness.snapshot(Chat, id, ctx))! })));
-  const inspection = await harness.inspect(ctx);
+  const inspection = await agent.inspection();
   return { id: project.id, name: project.name, conversations, files: project.files || [], inputVersions: project.inputVersions || [], tasks: await agent.tasks(), activeTasks: inspection.tasks, scheduling: inspection.scheduling, modelRequests: await agent.modelRequests(), runtimePid: process.pid };
 }
 async function chatId(value: unknown) {
@@ -126,14 +126,14 @@ async function dispatch(request: Record<string, unknown>) {
     case 'task.continue': return agent.continueTask(String(request.taskId));
     case 'task.pause': {
       const prepared = await agent.preparePause(String(request.taskId));
-      if (prepared.needsClose) { await harness.close(ctx); closeScience(); stopAfterResponse = true; return { pausedHost: true, taskId: request.taskId }; }
+      if (prepared.needsClose) { await agent.closeExecutions(); await harness.close(ctx); closeScience(); stopAfterResponse = true; return { pausedHost: true, taskId: request.taskId }; }
       return prepared.task;
     }
     case 'task.resume': return agent.resume(String(request.taskId));
     case 'task.cancel': return agent.cancel(String(request.taskId));
     case 'task.artifact': return agent.artifact(String(request.taskId), String(request.executionId), String(request.name));
     case 'conversation.status': return agent.conversation(await chatId(request.conversationId));
-    case 'close': await harness.close(ctx); closeScience(); return { closed: true };
+    case 'close': await agent.closeExecutions(); await harness.close(ctx); closeScience(); return { closed: true };
     default: throw new Error('unsupported operation');
   }
 }
@@ -148,4 +148,4 @@ try {
       if (request.op === 'close' || stopAfterResponse) break;
     } catch (error) { console.log(JSON.stringify({ id, error: String(error) })); }
   }
-} finally { await harness.close(ctx); closeScience(); lines.close(); }
+} finally { await agent.closeExecutions(); await harness.close(ctx); closeScience(); lines.close(); }

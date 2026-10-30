@@ -19,7 +19,7 @@
 - GET `/api/workbench/projects/<id>/conversations/<conversation-id>` 返回全部已提交历史、LiveDoc 流式片段、当前应用任务、执行尝试和实际模型请求数。
 - GET 同路径 `/events` 是 SSE，只观察已提交状态；事件 ID 为状态内容 SHA-256，支持 Last-Event-ID 和幂等完整快照。客户端替换状态，不追加重复记录。重连不会调用 submit/wait/resume。
 - POST `/api/workbench/projects/<id>/tasks` 是唯一新工作入口，参数含 conversationId/requestId/goal/authorizedTools。默认模式只支持 `synthetic_count`，明确 D2P 本地专项模式只提供 `d2p_local`。
-- 应用重开只读持久记录，调度器保持 paused；等待必要决定由 #9 已交付，执行任务的 [暂停与选择恢复](task-recovery.md) 由 #10 交付。存在未结算内核提交时拒绝新任务，不能借新输入带起未获选择的旧任务。项目排队/多项目并行由 #11 完成。
+- 应用重开只读持久记录，调度器保持 paused；等待必要决定由 #9 已交付，执行任务的 [暂停与选择恢复](task-recovery.md) 由 #10 交付。[项目队列](project-scheduling.md)同项目串行、项目间有界并行，等待/暂停释放位置、明确答复继续/恢复重新排队；运行存储隔离，不借新输入带起未获选择的旧任务。
 
 SSE 使用本机状态快照转发，持续等待仅针对可见 UI 连接，不循环请求模型；关闭界面会断开观察，不等于取消计算。此处不代表原生后台生命周期已通过，仍需相应任务验收。
 

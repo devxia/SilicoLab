@@ -100,6 +100,18 @@ worker 的网络拒绝钩子只针对可信科学入口，不能代替不可信 
 
 源码模式验证不代表 .app 关窗继续/完全退出和随包运行时已经通过；正式生命周期及分发仍有独立任务。
 
+## 项目队列与有界并行
+
+[#11 调度契约](project-scheduling.md) 持久保存项目FIFO，同项目最多1项主动执行、不同项目可并行；等待和暂停释放位置，答复/恢复明确继续后按当前队尾入场，重开只列出待恢复项。新任务运行存储位于项目内 `.silicolab/runs/<task>/`，避免第三方内核全局resume唤醒未选择任务；主项目仍保存对话/任务/输入/来源。备份需保留整个项目，不可只拷主SQLite。
+
+```bash
+.venv/bin/python -B -m unittest discover -s backend/tests -p test_workbench_scheduling.py -v
+# 复用8767临时夹具
+.venv/bin/python -B tests/e2e/browser_workbench_scheduling.py
+```
+
+当前4打开项目host、每项目1active、100未完成任务、8缓存运行存储上限有明确拒绝/回收规则，详见契约和ADR0002，不承诺无限并发。
+
 ## 常规检查
 
 ```bash

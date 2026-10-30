@@ -65,6 +65,7 @@ bash packaging/macos/build.sh
 | `packaging/macos/` | 原生入口、打包脚本、图标与 DMG 布局 |
 | `tests/e2e/` | 浏览器与打包应用的端到端验证 |
 | `tools/benchmarks/` | 可重复运行的性能工具 |
+| `tools/runtime-probe/` | 独立的智能体宿主与恢复验证；未接入正式应用 |
 | `docs/` | 架构、开发、打包、接口和功能说明 |
 | `examples/` | 可公开的人工输入示例 |
 | `research/` | 本地调研、原始证据、实验脚本与冻结快照；不作为发布源码 |

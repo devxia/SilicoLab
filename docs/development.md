@@ -33,6 +33,17 @@ npm --prefix frontend run build
 
 后端 98 项检查包含人工表格、引擎离线运行、最少改动搜索、历史删除、队列取消、资源和产品身份验证。安装 desktop 依赖后可覆盖原生桥测试，否则仅该项跳过。人工回归样例放在 `backend/tests/fixtures/`，不需要 research 或用户表格。
 
+## 智能体宿主的独立工程验证
+
+[pi-durable 最小宿主与恢复实验](../tools/runtime-probe/README.md) 对应 GitHub #2，不接入正式应用，也不使用真实模型、科学远端或认证。它独立锁定 npm 依赖，测试通过实际子进程和临时 SQLite 验收，不依赖本地调研目录。
+
+```bash
+npm --prefix tools/runtime-probe ci --ignore-scripts --no-audit --no-fund
+npm --prefix tools/runtime-probe run verify
+```
+
+该工具实际验证 Node 24.16.0、macOS 本地 POSIX owner lease 和 Python 3；更低 Node 版本、其他系统、后台和原生分发尚未验证。生成数据库/文件使用临时目录，依赖目录由 `node_modules/` 规则排除；源码、锁文件、人工测试与说明保留。版本差异、实验矩阵和后续限制详见工具文档。
+
 ## 浏览器流程
 
 使用 Playwright 和本机 Chrome；夹具仅监听 8766，使用临时数据库。每组测试启动一个全新的夹具，在另一个终端运行对应脚本，完成后停止夹具。

@@ -25,8 +25,8 @@ __pycache__/
 .coverage.*
 htmlcov/
 
-# Frontend dependencies and generated files
-/frontend/node_modules/
+# JavaScript dependencies at any depth; frontend generated files
+node_modules/
 /frontend/dist/
 *.tsbuildinfo
 

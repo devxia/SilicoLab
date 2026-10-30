@@ -66,6 +66,7 @@ bash packaging/macos/build.sh
 | `tests/e2e/` | 浏览器与打包应用的端到端验证 |
 | `tools/benchmarks/` | 可重复运行的性能工具 |
 | `tools/runtime-probe/` | 独立的智能体宿主与恢复验证；未接入正式应用 |
+| `tools/python-probe/` | macOS 单进程 Python 文件、网络与停止边界实验；未开放产品执行 |
 | `docs/` | 架构、开发、打包、接口和功能说明 |
 | `examples/` | 可公开的人工输入示例 |
 | `research/` | 本地调研、原始证据、实验脚本与冻结快照；不作为发布源码 |

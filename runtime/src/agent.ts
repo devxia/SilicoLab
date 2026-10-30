@@ -98,12 +98,14 @@ export function createLocalAgent(directory: string, getInputs: (id: string, conv
       if (task.workflow !== 'd2p_local' || !task.specialtyAcknowledged || !task.inputVersionId || !task.parameters) throw new Error('缺少明确专项、本地来源或固定输入授权');
       const fixed = await getInputs(task.inputVersionId, task.conversationId);
       await progress(10);
-      const response = await runScience({ workflow: 'd2p_local', specialtyAcknowledged: true, inputVersionId: fixed.id, inputs: fixed.inputs, parameters: task.parameters }, context.abortSignal,
+      const response = await runScience({ workflow: 'd2p_local', specialtyAcknowledged: true, inputVersionId: fixed.id, inputVersion: { id: fixed.id, conversationId: fixed.conversationId, createdAt: fixed.createdAt }, inputs: fixed.inputs, parameters: task.parameters,
+        task: { id: task.id, conversationId: task.conversationId, requestId: task.requestId, goal: task.goal, createdAt: task.createdAt, parameters: task.parameters, inputVersionId: fixed.id },
+        attempt: { id, toolTaskId: api.taskId, callId: api.callId } }, context.abortSignal,
         async (pid) => { await progress(30, pid); });
       await progress(85);
       const artifacts: Artifact[] = [];
       for (const item of response.files) {
-        if (!['synthesis.fasta', 'synthesis.xlsx'].includes(item.name)) throw new Error('科学工具返回未声明的产物');
+        if (!['synthesis.fasta', 'synthesis.xlsx', 'records.zip'].includes(item.name) && !/^sequence-\d{3}\.fasta$/.test(item.name)) throw new Error('科学工具返回未声明的产物');
         const bytes = Buffer.from(item.contentBase64, 'base64');
         const path = `.silicolab/outputs/${task.id}/${id}/${item.name}`;
         await files.write(path, bytes);

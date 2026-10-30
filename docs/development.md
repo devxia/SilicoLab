@@ -66,6 +66,18 @@ npm --prefix runtime run typecheck
 
 worker 的网络拒绝钩子只针对可信科学入口，不能代替不可信 Python 的系统隔离。正文中的真实来源、PID、网络尝试、产物 SHA-256 与逐项状态是实际执行证据，不宣称表达效果或载体校验已实现。
 
+## 科研结果与完整记录
+
+[#8 结果契约](scientific-results.md) 在右侧结果区检视真实序列表、完整 DNA/密码子、逐项错误和校验来源。成功、部分完成、失败与模型答复分开。单条/批量 FASTA、标准 Excel 和完整 ZIP 记录包来自同一次真实执行，记录包保留固定输入、原始响应和尝试身份；产物完整性不符时拒绝下载。
+
+```bash
+.venv/bin/python -B -m unittest discover -s backend/tests -p test_workbench_results.py -v
+# 复用8767临时夹具
+.venv/bin/python -B tests/e2e/browser_workbench_results.py
+```
+
+浏览器证据在 `outputs/ui/scientific-results/`，包括部分失败、9003bp完整复制、逐项产物核对和窄窗口横向浏览，不进入 Git。
+
 ## 常规检查
 
 ```bash

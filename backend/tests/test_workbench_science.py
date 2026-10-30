@@ -91,7 +91,7 @@ class LocalScienceTests(unittest.TestCase):
                 self.assertEqual(execution['result']['status'], 'failed')
                 self.assertEqual(execution['result']['network_attempts'], 0)
                 self.assertEqual(execution['result']['records'][0]['status'], 'failed')
-                self.assertEqual([artifact['name'] for artifact in execution['artifacts']], ['record.json'])
+                self.assertEqual([artifact['name'] for artifact in execution['artifacts']], ['records.zip', 'record.json'])
                 self.assertEqual(client.get('/api/jobs').json(), [])
                 self.assertNotIn('dna', execution['result']['records'][0])
 

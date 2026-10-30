@@ -1,10 +1,12 @@
 """Trusted structured science worker. Never executes model-generated code."""
 import base64
+import io
 import json
 from pathlib import Path
 import socket
 import sys
 import tempfile
+import zipfile
 
 
 def main():
@@ -63,6 +65,7 @@ def main():
                 payload = {'fileName': name, 'jumpName': 'pep', 'sequence': protein,
                            'ignoreCodonQueue': avoid, 'speciesName': codon.DEFAULT_SPECIES}
                 response = run_local(payload, metadata)
+                record['raw_response'] = response
                 dna = codon.validate_result(response, protein, avoid)
                 record.update(status='completed', dna=dna, terminal_stop_present=protein.endswith('*'),
                               checks={'characters': True, 'length': True, 'translation': True,
@@ -75,12 +78,31 @@ def main():
         fasta = ''.join(f'>{record["name"]}\n{record["dna"]}\n' for record in succeeded).encode()
         report = {'status': status, 'inputVersionId': request['inputVersionId'], 'engine_info': metadata,
                   'records': records, 'network_attempts': network_attempts - baseline,
-                  'network_guard_self_test': 'blocked', 'scope': 'D2P/pD2P_1.08t/predefined insertion; no vector validation implemented'}
+                  'network_guard_self_test': 'blocked', 'scope': 'D2P/pD2P_1.08t/predefined insertion; no vector validation implemented',
+                  'attempt': request['attempt']}
         files = []
+        def exported(name, media_type, content):
+            return {'name': name, 'mediaType': media_type, 'contentBase64': base64.b64encode(content).decode()}
+        excel = synthesis_workbook(records) if succeeded else None
         if succeeded:
-            files = [{'name': 'synthesis.fasta', 'mediaType': 'text/plain; charset=utf-8', 'contentBase64': base64.b64encode(fasta).decode()},
-                     {'name': 'synthesis.xlsx', 'mediaType': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-                      'contentBase64': base64.b64encode(synthesis_workbook(records)).decode()}]
+            files = [exported('synthesis.fasta', 'text/plain; charset=utf-8', fasta),
+                     exported('synthesis.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', excel)]
+            files += [exported(f'sequence-{index:03d}.fasta', 'text/plain; charset=utf-8',
+                               f'>{record["name"]}\n{record["dna"]}\n'.encode())
+                      for index, record in enumerate(records, 1) if record['status'] == 'completed']
+        bundle = io.BytesIO()
+        with zipfile.ZipFile(bundle, 'w', compression=zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr('record.json', json.dumps(report, ensure_ascii=False))
+            archive.writestr('task.json', json.dumps(request['task'], ensure_ascii=False))
+            fixed = {key: value for key, value in request['inputVersion'].items() if key != 'inputs'}
+            fixed['inputs'] = [{key: value for key, value in item.items() if key != 'contentBase64'} for item in request['inputs']]
+            archive.writestr('input-version.json', json.dumps(fixed, ensure_ascii=False))
+            for index, item in enumerate(request['inputs'], 1):
+                archive.writestr(f'inputs/{index:03d}.fasta', base64.b64decode(item['contentBase64'], validate=True))
+            if succeeded:
+                archive.writestr('synthesis.fasta', fasta)
+                archive.writestr('synthesis.xlsx', excel)
+        files.append(exported('records.zip', 'application/zip', bundle.getvalue()))
         print(json.dumps({'ok': True, 'result': report, 'files': files}, ensure_ascii=False))
     except Exception as error:
         print(json.dumps({'ok': False, 'error': str(error), 'network_attempts': network_attempts - baseline}, ensure_ascii=False))

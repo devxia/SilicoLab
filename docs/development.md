@@ -78,6 +78,16 @@ worker 的网络拒绝钩子只针对可信科学入口，不能代替不可信 
 
 浏览器证据在 `outputs/ui/scientific-results/`，包括部分失败、9003bp完整复制、逐项产物核对和窄窗口横向浏览，不进入 Git。
 
+## 必要用户决定
+
+[#9 决定契约](task-decisions.md) 将缺失终止符和不足工具权限保存为稳定待决定项；对话/任务面板可稍后答复，等待不循环调用模型，重复答复不重复执行。答复只作用于当前任务，不覆盖固定输入或原件；重开后不自动继续。
+
+```bash
+.venv/bin/python -B -m unittest discover -s backend/tests -p test_workbench_decisions.py -v
+# 复用8767临时夹具
+.venv/bin/python -B tests/e2e/browser_workbench_decisions.py
+```
+
 ## 常规检查
 
 ```bash

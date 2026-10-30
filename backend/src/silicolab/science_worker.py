@@ -34,7 +34,8 @@ def main():
         from silicolab.features.codon.engines import LOCAL, engine_metadata, run_local
         from silicolab.features.codon.spreadsheets import synthesis_workbook
         parameters = request['parameters']
-        if parameters.get('stopPolicy') not in {'preserve', 'add'}:
+        preflight = request.get('operation') == 'preflight'
+        if parameters.get('stopPolicy') not in ({'preserve', 'add', 'ask'} if preflight else {'preserve', 'add'}):
             raise ValueError('Select terminal-stop handling before execution')
         avoid = codon.normalize_avoid(parameters.get('avoid', ''))
         metadata = engine_metadata(LOCAL)
@@ -49,6 +50,13 @@ def main():
             raise ValueError('A task supports at most 200 sequences')
         if sum(len(protein) for _, _, protein in sources) > 200000:
             raise ValueError('A task supports at most 200,000 total amino-acid characters')
+        if preflight:
+            missing = [name for _, name, protein in sources if not protein.endswith('*')]
+            report = {'status': 'preflight', 'inputVersionId': request['inputVersionId'], 'engine_info': metadata,
+                      'records': [], 'missingStopNames': missing, 'network_attempts': network_attempts - baseline,
+                      'network_guard_self_test': 'blocked', 'scope': 'D2P local input inspection; no algorithm executed'}
+            print(json.dumps({'ok': True, 'result': report, 'files': []}, ensure_ascii=False))
+            return
         records = []
         for item, name, protein in sources:
             original = protein

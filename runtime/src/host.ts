@@ -113,13 +113,15 @@ async function dispatch(request: Record<string, unknown>) {
       if (request.workflow && !['validation', 'd2p_local'].includes(String(request.workflow))) throw new Error('未知任务模式');
       if (request.workflow === 'd2p_local') {
         const parameters = request.parameters as Record<string, unknown> | undefined;
-        if (!parameters || !['preserve', 'add'].includes(String(parameters.stopPolicy)) || typeof parameters.avoid !== 'string' || parameters.avoid.length > 2000 || typeof request.inputVersionId !== 'string') throw new Error('本地专项参数不完整');
-        options.parameters = { stopPolicy: parameters.stopPolicy as 'preserve' | 'add', avoid: parameters.avoid };
+        if (!parameters || !['preserve', 'add', 'ask'].includes(String(parameters.stopPolicy)) || typeof parameters.avoid !== 'string' || parameters.avoid.length > 2000 || typeof request.inputVersionId !== 'string') throw new Error('本地专项参数不完整');
+        options.parameters = { stopPolicy: parameters.stopPolicy as 'preserve' | 'add' | 'ask', avoid: parameters.avoid };
         options.inputVersionId = request.inputVersionId;
         options.specialtyAcknowledged = request.specialtyAcknowledged === true;
       }
       return agent.start(conversationId, request.requestId, request.goal, request.authorizedTools, options);
     }
+    case 'task.answer': return agent.answer(String(request.taskId), String(request.decisionId), String(request.answer));
+    case 'task.continue': return agent.continueTask(String(request.taskId));
     case 'task.cancel': return agent.cancel(String(request.taskId));
     case 'task.artifact': return agent.artifact(String(request.taskId), String(request.executionId), String(request.name));
     case 'conversation.status': return agent.conversation(await chatId(request.conversationId));

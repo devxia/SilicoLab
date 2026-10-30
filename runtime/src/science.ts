@@ -1,9 +1,9 @@
 import { spawn } from 'node:child_process';
 
-export type ScienceParameters = { stopPolicy: 'preserve' | 'add'; avoid: string };
+export type ScienceParameters = { stopPolicy: 'preserve' | 'add' | 'ask'; avoid: string };
 export type ScienceOptions = { workflow?: 'validation' | 'd2p_local'; specialtyAcknowledged?: boolean; inputVersionId?: string; parameters?: ScienceParameters };
 export type ScienceRecord = { name: string; protein: string; status: string; dna?: string; error?: string; checks?: Record<string, boolean> };
-export type ScienceResult = { status: string; inputVersionId: string; engine_info: Record<string, string | number | boolean>; records: ScienceRecord[]; network_attempts: number; network_guard_self_test: string; scope: string };
+export type ScienceResult = { status: string; inputVersionId: string; engine_info: Record<string, string | number | boolean>; records: ScienceRecord[]; network_attempts: number; network_guard_self_test: string; scope: string; missingStopNames?: string[] };
 export type ScienceResponse = { ok: boolean; error?: string; result: ScienceResult; files: { name: string; mediaType: string; contentBase64: string }[] };
 
 /** Spawn only the trusted packaged scientific entry, never model-authored Python. */

@@ -7,12 +7,13 @@ import { fauxAssistantMessage, fauxProvider, fauxToolCall } from '@earendil-work
 import { createRegistry, defineDoc, defineExtension, defineTool, LiveDoc, type ConversationId, type Harness, type SubmissionId, type ToolExecutionApi } from '@earendil-works/pi-durable';
 import { ProjectFiles } from './inputs.ts';
 import { runScience, type ScienceOptions, type ScienceResult } from './science.ts';
+import { stopDecision, toolDecision, type TaskDecision } from './decisions.ts';
 
 const ctx = BACKGROUND_CONTEXT;
 type Artifact = { path: string; sha256: string; size: number; name?: string; mediaType?: string };
 type ExecutionResult = { characters: number } | ScienceResult;
 type Execution = { id: string; toolTaskId: number; callId: string; tool: string; input: string; progress: number; status: string; error?: string; pythonPid?: number; artifact?: Artifact; artifacts?: Artifact[]; result?: ExecutionResult };
-export type ResearchTask = ScienceOptions & { id: string; conversationId: string; requestId: string; goal: string; status: string; authorizedTools: string[]; createdAt: string; submissionId?: SubmissionId; toolExecutions: Execution[]; error?: string };
+export type ResearchTask = ScienceOptions & { id: string; conversationId: string; requestId: string; goal: string; status: string; authorizedTools: string[]; createdAt: string; submissionId?: SubmissionId; toolExecutions: Execution[]; error?: string; decisions?: TaskDecision[]; admission?: { authorizedTools: string[]; options: ScienceOptions }; preflight?: { missingStopNames: string[]; inputVersionId: string } };
 const Ledger = defineDoc<{ tasks: ResearchTask[]; modelRequests: number }>({
   kind: 'silicolab.tasks', version: 1, scope: 'session', initial: () => ({ tasks: [], modelRequests: 0 }), checkpointWhen: () => true,
 });
@@ -36,16 +37,20 @@ export function createLocalAgent(directory: string, getInputs: (id: string, conv
       : '本机人工文本计数已生成可检查结果。这是验证模型，不是科研结论。');
     const user = transcript.messages.findLast((entry) => entry.role === 'user');
     const text = user?.role === 'user' && typeof user.content === 'string' ? user.content : '';
-    const task = (await tasks()).findLast((task) => task.goal === text && task.status === 'running');
-    const tool = task?.workflow === 'd2p_local' ? 'd2p_local' : 'synthetic_count';
+    const active = (await harness.inspect(ctx)).submissions.filter((submission) => submission.type === 'input' && submission.status === 'placed');
+    if (active.length !== 1) throw new Error('本机验证模型无法确定唯一已准入任务');
+    const task = await taskForSubmission(active[0].conversationId, active[0].id);
+    const tool = task.workflow === 'd2p_local' ? 'd2p_local' : 'synthetic_count';
     return fauxAssistantMessage([fauxToolCall(tool, tool === 'synthetic_count' ? { text } : {}, { id: randomUUID() })], { stopReason: 'toolUse' });
   };
   faux.setResponses([response]);
 
   async function tracked(tool: string, input: string, api: ToolExecutionApi, context: Context,
     work: (task: ResearchTask, id: string, progress: (value: number, pythonPid?: number) => Promise<void>) => Promise<{ result: ExecutionResult; artifact?: Artifact; artifacts?: Artifact[]; isError?: boolean; error?: string }>) {
-    const task = (await tasks()).findLast((item) => item.conversationId === String(api.conversationId) && item.status === 'running');
-    if (!task || !task.authorizedTools.includes(tool)) throw new Error('需要用户决定：当前任务未授权所需工具');
+    const live = await harness.snapshot(LiveDoc, api.conversationId, ctx);
+    if (live?.run?.inputs.length !== 1) throw new Error('工具无法关联唯一内核输入');
+    const task = await taskForSubmission(api.conversationId, live.run.inputs[0]);
+    if (!task.authorizedTools.includes(tool)) throw new Error('需要用户决定：当前任务未授权所需工具');
     const id = randomUUID();
     await api.commit(async (tx) => {
       (await tx.doc(Ledger)).tasks.find((item) => item.id === task.id)!.toolExecutions.push({ id, toolTaskId: api.taskId, callId: api.callId, tool, input, status: 'running', progress: 0 });
@@ -121,28 +126,63 @@ export function createLocalAgent(directory: string, getInputs: (id: string, conv
   registry.install(defineExtension({ name: 'silicolab.controlled-tools', tools: [countTool, localTool] }));
 
   async function tasks() { return (await harness.snapshot(Ledger, ctx))?.tasks || []; }
+  async function taskForSubmission(conversationId: ConversationId, submissionId: SubmissionId) {
+    const submission = await harness.submission(submissionId, ctx);
+    const record = await submission?.status(ctx);
+    const task = record?.conversationId === conversationId && record.requestId
+      ? (await tasks()).find((item) => item.conversationId === String(conversationId) && item.requestId === record.requestId)
+      : undefined;
+    if (!task) throw new Error('内核提交未关联已保存任务');
+    return task;
+  }
   async function start(conversationId: ConversationId, requestId: string, goal: string, authorizedTools: string[], options: ScienceOptions = {}) {
     const existing = (await tasks()).find((item) => item.conversationId === String(conversationId) && item.requestId === requestId);
     if (existing) {
-      if (existing.goal !== goal || JSON.stringify(existing.authorizedTools) !== JSON.stringify(authorizedTools) || JSON.stringify(existing.parameters) !== JSON.stringify(options.parameters) || existing.inputVersionId !== options.inputVersionId || (existing.workflow || 'validation') !== (options.workflow || 'validation') || Boolean(existing.specialtyAcknowledged) !== Boolean(options.specialtyAcknowledged)) throw new Error('请求身份已用于不同目标、输入或权限');
+      const admitted = existing.admission || { authorizedTools: existing.authorizedTools, options: { workflow: existing.workflow, parameters: existing.parameters, inputVersionId: existing.inputVersionId, specialtyAcknowledged: existing.specialtyAcknowledged } };
+      const original = admitted.options;
+      if (existing.goal !== goal || JSON.stringify(admitted.authorizedTools) !== JSON.stringify(authorizedTools) || JSON.stringify(original.parameters) !== JSON.stringify(options.parameters) || original.inputVersionId !== options.inputVersionId || (original.workflow || 'validation') !== (options.workflow || 'validation') || Boolean(original.specialtyAcknowledged) !== Boolean(options.specialtyAcknowledged)) throw new Error('请求身份已用于不同目标、输入或权限');
       return existing;
     }
     if ((await harness.inspect(ctx)).submissions.length) throw new Error('项目已有在途或待恢复任务，请先处理原任务');
     const scientific = options.workflow === 'd2p_local';
     const requiredTool = scientific ? 'd2p_local' : 'synthetic_count';
     if (authorizedTools.some((tool) => tool !== requiredTool)) throw new Error('任务模式不提供所请求工具');
+    const decisions: TaskDecision[] = [];
+    let preflight: ResearchTask['preflight'];
     if (scientific) {
-      if (!options.specialtyAcknowledged || !options.inputVersionId || !options.parameters || !['preserve', 'add'].includes(options.parameters.stopPolicy)) throw new Error('请明确选择 D2P 专项本地实验、固定输入与终止符策略');
-      await getInputs(options.inputVersionId, String(conversationId));
+      if (!options.specialtyAcknowledged || !options.inputVersionId || !options.parameters || !['preserve', 'add', 'ask'].includes(options.parameters.stopPolicy)) throw new Error('请明确选择 D2P 专项本地实验、固定输入与终止符策略');
+      const fixed = await getInputs(options.inputVersionId, String(conversationId));
+      if (options.parameters.stopPolicy === 'ask') {
+        const inspected = await runScience({ operation: 'preflight', workflow: 'd2p_local', specialtyAcknowledged: true, inputVersionId: fixed.id, inputs: fixed.inputs, parameters: options.parameters }, undefined, async () => {});
+        preflight = { inputVersionId: fixed.id, missingStopNames: inspected.result.missingStopNames || [] };
+        if (preflight.missingStopNames.length) decisions.push(stopDecision(preflight.missingStopNames));
+      }
     }
+    if (!authorizedTools.includes(requiredTool)) decisions.push(toolDecision(requiredTool));
     const task: ResearchTask = { ...options, workflow: options.workflow || 'validation', id: randomUUID(), conversationId: String(conversationId), requestId, goal,
-      authorizedTools, status: authorizedTools.includes(requiredTool) ? 'running' : 'needs_decision', createdAt: new Date().toISOString(), toolExecutions: [] };
+      authorizedTools: [...authorizedTools], admission: { authorizedTools: [...authorizedTools], options }, decisions,
+      status: decisions.length ? 'needs_decision' : 'admission_pending', createdAt: new Date().toISOString(), toolExecutions: [], ...(preflight ? { preflight } : {}) };
+    if (task.parameters?.stopPolicy === 'ask' && !preflight?.missingStopNames.length) task.parameters = { ...task.parameters, stopPolicy: 'preserve' };
     await harness.commit(async (tx) => { (await tx.doc(Ledger)).tasks.push(task); }, ctx);
     if (task.status === 'needs_decision') return task;
+    return launch(task);
+  }
+  async function launch(task: ResearchTask) {
+    const conversationId = Number(task.conversationId) as ConversationId;
+    // An explicit continuation reconciles any already-admitted input by stable identity.
+    const existing = await harness.commit((tx) => tx.submissionByRequest(conversationId, task.requestId), ctx);
+    const pending = (await harness.inspect(ctx)).submissions;
+    if (pending.some((submission) => submission.id !== existing?.id)) throw new Error('项目已有在途或待恢复任务，请先处理原任务');
+    const scientific = task.workflow === 'd2p_local';
+    if (scientific) await getInputs(task.inputVersionId!, task.conversationId);
     const conversation = (await harness.conversation(conversationId, ctx))!;
     await conversation.configure({ model: { provider: 'faux', modelId: 'faux-1' }, tools: scientific ? [localTool] : [countTool] }, ctx);
-    const submission = await conversation.submit({ type: 'input', requestId, content: goal, whenBusy: 'reject' }, ctx);
-    await harness.commit(async (tx) => { (await tx.doc(Ledger)).tasks.find((item) => item.id === task.id)!.submissionId = submission.id; }, ctx);
+    const submission = existing ? (await harness.submission(existing.id, ctx))!
+      : await conversation.submit({ type: 'input', requestId: task.requestId, content: task.goal, whenBusy: 'reject' }, ctx);
+    await harness.commit(async (tx) => {
+      const saved = (await tx.doc(Ledger)).tasks.find((item) => item.id === task.id)!;
+      saved.submissionId = submission.id; saved.status = 'running';
+    }, ctx);
     void submission.wait(ctx).then(async (settled) => {
       await harness.commit(async (tx) => {
         const saved = (await tx.doc(Ledger)).tasks.find((item) => item.id === task.id)!;
@@ -150,11 +190,49 @@ export function createLocalAgent(directory: string, getInputs: (id: string, conv
         if (settled.status !== 'done') saved.error = settled.reason;
       }, ctx);
     }).catch(() => { /* Opening never resumes pending work. */ });
-    return { ...task, submissionId: submission.id };
+    return { ...task, submissionId: submission.id, status: 'running' };
+  }
+  async function continueTask(taskId: string) {
+    const task = (await tasks()).find((item) => item.id === taskId);
+    if (!task) throw new Error('任务不存在');
+    if (task.status !== 'admission_pending') return task;
+    if (task.decisions?.some((decision) => decision.status !== 'answered')) throw new Error('仍有待答复问题');
+    return launch(task);
+  }
+  async function answer(taskId: string, decisionId: string, value: string) {
+    const task = (await tasks()).find((item) => item.id === taskId);
+    const decision = task?.decisions?.find((item) => item.id === decisionId);
+    if (!task || !decision) throw new Error('待决定项不存在');
+    if (!decision.options.some((option) => option.value === value)) throw new Error('答复不在允许选项中');
+    if (decision.status === 'answered') {
+      if (decision.answer !== value) throw new Error('该决定已有不同答复，不能覆盖');
+      return task;
+    }
+    if (task.status !== 'needs_decision') throw new Error('任务当前不等待决定');
+    const last = task.decisions!.filter((item) => item.status === 'pending').length === 1;
+    if (last && value !== 'decline') {
+      if ((await harness.inspect(ctx)).submissions.length) throw new Error('项目正在执行或有待恢复任务，请稍后明确继续');
+      if (task.workflow === 'd2p_local') await getInputs(task.inputVersionId!, task.conversationId);
+    }
+    await harness.commit(async (tx) => {
+      const saved = (await tx.doc(Ledger)).tasks.find((item) => item.id === taskId)!;
+      const question = saved.decisions!.find((item) => item.id === decisionId)!;
+      question.status = 'answered'; question.answer = value; question.answeredAt = new Date().toISOString();
+      if (question.kind === 'terminal_stop') saved.parameters = { ...saved.parameters!, stopPolicy: value as 'preserve' | 'add' };
+      if (question.kind === 'tool_authorization' && value === 'grant') saved.authorizedTools = [saved.workflow === 'd2p_local' ? 'd2p_local' : 'synthetic_count'];
+      if (value === 'decline') saved.status = 'cancelled';
+      else if (!saved.decisions!.some((item) => item.status === 'pending')) saved.status = 'admission_pending';
+    }, ctx);
+    // Return the durable handoff before admission. The user's explicit continue action is retryable.
+    return (await tasks()).find((item) => item.id === taskId)!;
   }
   async function cancel(taskId: string) {
     const task = (await tasks()).find((task) => task.id === taskId);
     if (!task) throw new Error('任务不存在');
+    if (['needs_decision', 'admission_pending'].includes(task.status)) {
+      await harness.commit(async (tx) => { (await tx.doc(Ledger)).tasks.find((item) => item.id === taskId)!.status = 'cancelled'; }, ctx);
+      return (await tasks()).find((item) => item.id === taskId)!;
+    }
     if (task.status !== 'running') return task;
     const chat = (await harness.conversation(Number(task.conversationId) as ConversationId, ctx))!;
     await chat.abort(ctx);
@@ -183,6 +261,6 @@ export function createLocalAgent(directory: string, getInputs: (id: string, conv
       tasks: (await tasks()).filter((task) => task.conversationId === String(conversationId)), modelRequests: (await harness.snapshot(Ledger, ctx))?.modelRequests || 0,
       scheduling: (await harness.inspect(ctx)).scheduling };
   }
-  return { models, registry, bind(value: Harness) { harness = value; }, start, tasks, conversation, cancel, artifact,
+  return { models, registry, bind(value: Harness) { harness = value; }, start, tasks, conversation, cancel, artifact, answer, continueTask,
     async modelRequests() { return (await harness.snapshot(Ledger, ctx))?.modelRequests || 0; } };
 }

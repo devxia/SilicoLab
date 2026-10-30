@@ -12,14 +12,14 @@
 
 模型答复结算为 `answered`，不是科研任务 `completed`：界面显示“模型已答复”并注明不代表科研计算完成，工具是否完成与实际产物分别展示。真实科学工具和独立校验由 #7/#8 接入。
 
-未授权所需工具时保存 `needs_decision`，不发起模型或执行工具，不把目标文字当作扩大权限的许可。完整决定答复与继续工作流由任务 #9 实施；本切片不暗中猜测决定。
+未授权所需工具时保存 `needs_decision`，不发起模型或执行工具，不把目标文字当作扩大权限的许可。[任务决定工作流](task-decisions.md)保存稳定问题和答复，用户明确选择后再继续；不暗中猜测决定。
 
 ## 观察与重连
 
 - GET `/api/workbench/projects/<id>/conversations/<conversation-id>` 返回全部已提交历史、LiveDoc 流式片段、当前应用任务、执行尝试和实际模型请求数。
 - GET 同路径 `/events` 是 SSE，只观察已提交状态；事件 ID 为状态内容 SHA-256，支持 Last-Event-ID 和幂等完整快照。客户端替换状态，不追加重复记录。重连不会调用 submit/wait/resume。
-- POST `/api/workbench/projects/<id>/tasks` 是唯一新工作入口，参数含 conversationId/requestId/goal/authorizedTools。当前工具集合仅支持 `synthetic_count`。
-- 应用重开只读持久记录，调度器保持 paused；任务恢复与本机暂停在 #10 交付。存在未结算内核提交时拒绝新任务，不能借新输入带起未获选择的旧任务。项目排队/多项目并行由 #11 完成。
+- POST `/api/workbench/projects/<id>/tasks` 是唯一新工作入口，参数含 conversationId/requestId/goal/authorizedTools。默认模式只支持 `synthetic_count`，明确 D2P 本地专项模式只提供 `d2p_local`。
+- 应用重开只读持久记录，调度器保持 paused；等待必要决定由 #9 已交付；未完成执行任务的恢复与本机暂停在 #10 交付。存在未结算内核提交时拒绝新任务，不能借新输入带起未获选择的旧任务。项目排队/多项目并行由 #11 完成。
 
 SSE 使用本机状态快照转发，持续等待仅针对可见 UI 连接，不循环请求模型；关闭界面会断开观察，不等于取消计算。此处不代表原生后台生命周期已通过，仍需相应任务验收。
 

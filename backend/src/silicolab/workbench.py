@@ -29,7 +29,7 @@ class ConversationTitle(BaseModel):
 
 
 class ScienceParameters(BaseModel):
-    stopPolicy: Literal['preserve', 'add']
+    stopPolicy: Literal['preserve', 'add', 'ask']
     avoid: str = Field(default='', max_length=2000)
 
 
@@ -42,6 +42,10 @@ class TaskInput(BaseModel):
     specialtyAcknowledged: bool = False
     inputVersionId: str | None = Field(default=None, max_length=100)
     parameters: ScienceParameters | None = None
+
+
+class DecisionAnswer(BaseModel):
+    answer: str = Field(min_length=1, max_length=100)
 
 
 class ImportFile(BaseModel):
@@ -268,6 +272,14 @@ def router(workbench):
     @routes.post('/projects/{project_id}/tasks', status_code=201)
     def start_task(project_id: str, body: TaskInput):
         return invoke(workbench.call, project_id, 'task.start', **body.model_dump(exclude_none=True))
+
+    @routes.post('/projects/{project_id}/tasks/{task_id}/decisions/{decision_id}')
+    def answer_decision(project_id: str, task_id: str, decision_id: str, body: DecisionAnswer):
+        return invoke(workbench.call, project_id, 'task.answer', taskId=task_id, decisionId=decision_id, answer=body.answer)
+
+    @routes.post('/projects/{project_id}/tasks/{task_id}/continue')
+    def continue_task(project_id: str, task_id: str):
+        return invoke(workbench.call, project_id, 'task.continue', taskId=task_id)
 
     @routes.post('/projects/{project_id}/tasks/{task_id}/cancel')
     def cancel_task(project_id: str, task_id: str):

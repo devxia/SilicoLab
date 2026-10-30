@@ -1,5 +1,6 @@
 """Project application contract; one owner and real durable Node host per project."""
 import asyncio
+import base64
 import fcntl
 import hashlib
 import json
@@ -8,12 +9,14 @@ from pathlib import Path
 import select
 import shutil
 import subprocess
+import sys
 import threading
 import uuid
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
+from typing import Literal
 
 
 class ProjectPath(BaseModel):
@@ -25,11 +28,20 @@ class ConversationTitle(BaseModel):
     title: str = Field(min_length=1, max_length=200)
 
 
+class ScienceParameters(BaseModel):
+    stopPolicy: Literal['preserve', 'add']
+    avoid: str = Field(default='', max_length=2000)
+
+
 class TaskInput(BaseModel):
     conversationId: str = Field(min_length=1, max_length=100)
     requestId: str = Field(min_length=1, max_length=200)
     goal: str = Field(min_length=1, max_length=100000)
     authorizedTools: list[str] = Field(default_factory=list, max_length=20)
+    workflow: Literal['validation', 'd2p_local'] = 'validation'
+    specialtyAcknowledged: bool = False
+    inputVersionId: str | None = Field(default=None, max_length=100)
+    parameters: ScienceParameters | None = None
 
 
 class ImportFile(BaseModel):
@@ -71,7 +83,8 @@ class ProjectHost:
             node = os.environ.get('SILICOLAB_NODE') or shutil.which('node')
             if not node or not (runtime / 'node_modules/@earendil-works/pi-durable/package.json').is_file():
                 raise ValueError('智能体运行时未安装，请按开发文档安装 runtime 依赖')
-            env = {'PATH': os.environ.get('PATH', '/usr/bin:/bin'), 'LANG': 'en_US.UTF-8'}
+            env = {'PATH': os.environ.get('PATH', '/usr/bin:/bin'), 'LANG': 'en_US.UTF-8',
+                   'SILICOLAB_PYTHON': sys.executable, 'SILICOLAB_BACKEND': str(Path(__file__).resolve().parent.parent)}
             self._process = subprocess.Popen([node, str(runtime / 'src/host.ts'), str(self.state),
                                               'create' if create else 'open', name],
                                              stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
@@ -254,8 +267,18 @@ def router(workbench):
 
     @routes.post('/projects/{project_id}/tasks', status_code=201)
     def start_task(project_id: str, body: TaskInput):
-        return invoke(workbench.call, project_id, 'task.start', conversationId=body.conversationId,
-                      requestId=body.requestId, goal=body.goal, authorizedTools=body.authorizedTools)
+        return invoke(workbench.call, project_id, 'task.start', **body.model_dump(exclude_none=True))
+
+    @routes.post('/projects/{project_id}/tasks/{task_id}/cancel')
+    def cancel_task(project_id: str, task_id: str):
+        return invoke(workbench.call, project_id, 'task.cancel', taskId=task_id)
+
+    @routes.get('/projects/{project_id}/tasks/{task_id}/artifacts/{execution_id}/{name}')
+    def download_artifact(project_id: str, task_id: str, execution_id: str, name: str):
+        artifact = invoke(workbench.call, project_id, 'task.artifact', taskId=task_id, executionId=execution_id, name=name)
+        safe_name = artifact['name']
+        return Response(base64.b64decode(artifact['contentBase64']), media_type=artifact['mediaType'],
+                        headers={'Content-Disposition': f'attachment; filename="{safe_name}"'})
 
     @routes.get('/projects/{project_id}/conversations/{conversation_id}')
     def conversation_status(project_id: str, conversation_id: str):

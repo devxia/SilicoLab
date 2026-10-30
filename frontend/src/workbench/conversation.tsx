@@ -1,6 +1,9 @@
 import { useEffect, useState } from 'react';
-export type ToolExecution = { id: string; toolTaskId: number; callId: string; tool: string; input: string; status: string; progress: number; error?: string; result?: { characters: number }; artifact?: { path: string; sha256: string; size: number } };
-export type ResearchTask = { id: string; conversationId: string; requestId: string; goal: string; status: string; submissionId?: number; toolExecutions: ToolExecution[] };
+import { request } from './client';
+export type Artifact = { path: string; sha256: string; size: number; name?: string; mediaType?: string };
+export type ScienceResult = { status: string; inputVersionId: string; engine_info: { label: string; id: string; version: string; network_used: boolean }; network_attempts: number; records: { name: string; protein: string; dna?: string; status: string; error?: string; checks?: Record<string, boolean> }[] };
+export type ToolExecution = { id: string; toolTaskId: number; callId: string; tool: string; input: string; status: string; progress: number; error?: string; result?: { characters?: number } & Partial<ScienceResult>; artifact?: Artifact; artifacts?: Artifact[] };
+export type ResearchTask = { id: string; conversationId: string; requestId: string; goal: string; status: string; workflow?: string; submissionId?: number; toolExecutions: ToolExecution[] };
 type Block = { type: string; text?: string; name?: string };
 type Message = { role: string; content: string | Block[] };
 export type ConversationState = { conversationId: string; entries: { id: number; kind: string; model?: Message[] }[]; partial: Block[]; tasks: ResearchTask[]; scheduling: string; modelRequests: number };
@@ -22,14 +25,22 @@ export function useConversation(projectId?: string, conversationId?: string | nu
   return { state: snapshot && snapshot.projectId === projectId && snapshot.data.conversationId === conversationId ? snapshot.data : null, connected, problem };
 }
 function text(content: string | Block[]) { return typeof content === 'string' ? content : content.filter((block) => block.type === 'text').map((block) => block.text || '').join(''); }
-export function ConversationHistory({ state }: { state: ConversationState }) {
+export function ConversationHistory({ state, projectId }: { state: ConversationState; projectId: string }) {
   return <div className="wb-transcript" aria-label="对话记录">
     {state.entries.map((entry) => <div key={entry.id}>{entry.model?.filter((message) => message.role !== 'system' && text(message.content)).map((message, index) => <article key={index} className={`wb-message wb-message-${message.role}`}><small>{message.role === 'user' ? '你' : message.role === 'toolResult' ? '工具结果' : 'SilicoLab · 本机验证模型'}</small><p>{text(message.content)}</p></article>)}</div>)}
     {state.partial.length > 0 && <article className="wb-message wb-partial"><small>本机验证模型 · 正在响应</small><p>{text(state.partial)}</p></article>}
-    {state.tasks.map((task) => <TaskCard key={task.id} task={task} scheduling={state.scheduling} />)}
+    {state.tasks.map((task) => <TaskCard key={task.id} task={task} scheduling={state.scheduling} projectId={projectId} />)}
   </div>;
 }
-export function TaskCard({ task, scheduling }: { task: ResearchTask; scheduling: string }) {
-  const status = task.status === 'running' && scheduling === 'paused' ? '等待选择恢复' : task.status === 'answered' ? '模型已答复' : task.status === 'needs_decision' ? '需要用户决定' : task.status === 'failed' ? '执行失败' : '正在执行';
-  return <section className="wb-task-card" aria-label={`任务 ${task.id}`}><header><strong>{status}</strong><small>{task.id.slice(0, 8)}</small></header><p>{task.goal}</p>{task.status === 'needs_decision' && <p>当前任务未授权所需工具，尚未发起模型或执行请求。</p>}{task.toolExecutions.map((execution) => <div className="wb-tool-execution" key={execution.id}><strong>{execution.tool}</strong><small>输入：{execution.input}</small><progress max={100} value={execution.progress} aria-label="工具执行进度" /><span>{execution.status === 'completed' ? '工具已完成' : execution.status === 'failed' ? '工具执行失败' : '工具执行中'} · {execution.progress}%</span>{execution.error && <p role="alert">{execution.error}</p>}{execution.result && <p>实际字符数：{execution.result.characters}</p>}{execution.artifact && <details><summary>查看产物来源</summary><code>{execution.artifact.path}</code><code>SHA-256: {execution.artifact.sha256}</code><code>执行尝试：{execution.id} / 内核工具：{execution.toolTaskId}</code></details>}</div>)}<small>模型答复不等于科研任务完成；此处仅做本机人工验证。</small></section>;
+export function TaskCard({ task, scheduling, projectId }: { task: ResearchTask; scheduling: string; projectId: string }) {
+  const [cancelError, setCancelError] = useState('');
+  const [cancelling, setCancelling] = useState(false);
+  async function cancel() {
+    setCancelling(true); setCancelError('');
+    try { await request(`/projects/${projectId}/tasks/${task.id}/cancel`, 'POST'); }
+    catch (error) { setCancelError((error as Error).message); }
+    finally { setCancelling(false); }
+  }
+  const status = task.status === 'running' && scheduling === 'paused' ? '等待选择恢复' : task.status === 'answered' ? '模型已答复' : task.status === 'needs_decision' ? '需要用户决定' : task.status === 'failed' ? '执行失败' : task.status === 'cancelled' ? '任务已取消' : '正在执行';
+  return <section className="wb-task-card" aria-label={`任务 ${task.id}`}><header><strong>{status}</strong><small>{task.id.slice(0, 8)}</small>{task.status === 'running' && <button disabled={cancelling} onClick={cancel}>{cancelling ? '正在取消…' : '取消本机任务'}</button>}</header>{cancelError && <p role="alert">{cancelError}</p>}<p>{task.goal}</p>{task.status === 'needs_decision' && <p>当前任务未授权所需工具，尚未发起模型或执行请求。</p>}{task.toolExecutions.map((execution) => <div className="wb-tool-execution" key={execution.id}><strong>{execution.tool}</strong><small>输入：{execution.input}</small><progress max={100} value={execution.progress} aria-label="工具执行进度" /><span>{execution.status === 'completed' ? '工具已完成' : execution.status === 'failed' ? '工具执行失败' : execution.status === 'cancelled' ? '工具已取消' : '工具执行中'} · {execution.progress}%</span>{execution.error && <p role="alert">{execution.error}</p>}{typeof execution.result?.characters === 'number' && <p>实际字符数：{execution.result.characters}</p>}{execution.result?.records && <div className="wb-science-summary"><strong>实际计算来源：{execution.result.engine_info?.label} · {execution.result.engine_info?.version}</strong><small>固定输入：{execution.result.inputVersionId}；网络请求：{execution.result.network_attempts}</small>{execution.result.records.map((record, index) => <article key={index}><h4>{record.name} · {record.status === 'completed' ? '已校验' : '失败'}</h4>{record.dna && <pre>{record.dna}</pre>}{record.error && <p role="alert">{record.error}</p>}</article>)}</div>}{execution.artifacts?.map((artifact) => <a className="button outline small" key={artifact.path} href={`/api/workbench/projects/${projectId}/tasks/${task.id}/artifacts/${execution.id}/${artifact.name}`} download>{artifact.name === 'synthesis.xlsx' ? '下载合成表 Excel' : artifact.name === 'synthesis.fasta' ? '下载 DNA FASTA' : '下载来源记录'}</a>)}{execution.artifact && <details><summary>查看产物来源</summary><code>{execution.artifact.path}</code><code>SHA-256: {execution.artifact.sha256}</code><code>执行尝试：{execution.id} / 内核工具：{execution.toolTaskId}</code></details>}</div>)}<small>模型答复不等于科研任务完成；计算结果以实际产物和独立校验为准。</small></section>;
 }

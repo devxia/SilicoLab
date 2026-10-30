@@ -54,6 +54,18 @@ npm --prefix runtime run typecheck
 
 前端构建会替换 `frontend/dist`，应先完成构建再运行后端全量测试/浏览器夹具，避免构建期间资源被暂时移除影响测试。
 
+## 项目型本地科学任务
+
+[#7 本地科学任务契约](local-scientific-tasks.md) 将固定 FASTA 与已授权 D2P 本地专项接入真实内核，Node 仅启动可信 Python 科学入口，复用原算法/独立校验/合成表导出。任务区可明确选择来源、终止符和避免位点并运行，查看逐条校验、取消本机任务及下载产物。普通请求不会自动进入专项，本地失败不上传。
+
+```bash
+.venv/bin/python -B -m unittest discover -s backend/tests -p test_workbench_science.py -v
+# 复用8767临时夹具
+.venv/bin/python -B tests/e2e/browser_workbench_science.py
+```
+
+worker 的网络拒绝钩子只针对可信科学入口，不能代替不可信 Python 的系统隔离。正文中的真实来源、PID、网络尝试、产物 SHA-256 与逐项状态是实际执行证据，不宣称表达效果或载体校验已实现。
+
 ## 常规检查
 
 ```bash

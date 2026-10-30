@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { dirname, join, resolve } from 'node:path';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import { createLocalAgent } from './agent.ts';
+import type { ScienceOptions } from './science.ts';
 import { defineDoc, Harness, type ConversationId } from '@earendil-works/pi-durable';
 import { openNodeSqliteStorage } from '@earendil-works/pi-durable/storage/sqlite/node';
 import { ProjectFiles, type ImportedFile, type InputVersion } from './inputs.ts';
@@ -20,16 +21,23 @@ const Chat = defineDoc<{ title: string; draft: string; revision: number }>({
   kind: 'silicolab.conversation', version: 1, scope: 'conversation', history: 'latest', fork: 'initial',
   initial: () => ({ title: '新对话', draft: '', revision: 0 }), checkpointWhen: () => true,
 });
-const agent = createLocalAgent(dirname(resolve(directory)));
+const files = new ProjectFiles(dirname(resolve(directory)));
+let durable: Harness;
+const agent = createLocalAgent(dirname(resolve(directory)), async (versionId, conversationId) => {
+  const project = (await durable.snapshot(Project, ctx))!;
+  const version = project.inputVersions?.find((input) => input.id === versionId && input.conversationId === conversationId);
+  if (!version) throw new Error('当前对话没有该固定输入版本');
+  return files.fixed(version);
+});
 const harness = await Harness.open(await openNodeSqliteStorage(join(resolve(directory), 'session.sqlite')), {
   models: agent.models, registry: agent.registry,
   settings: { compaction: { enabled: false }, retry: { maxRetries: 0 }, restartLimit: 3, progress: { partialIntervalMs: 30, outputIntervalMs: 30 } },
 }, ctx);
 agent.bind(harness);
+durable = harness;
 const existing = await harness.snapshot(Project, ctx);
 if (!existing && mode !== 'create') { await harness.close(ctx); throw new Error('project identity missing'); }
 await harness.commit((tx) => tx.doc(Project), ctx);
-const files = new ProjectFiles(dirname(resolve(directory)));
 
 async function snapshot() {
   const project = (await harness.snapshot(Project, ctx))!;
@@ -101,8 +109,19 @@ async function dispatch(request: Record<string, unknown>) {
     case 'task.start': {
       const conversationId = await chatId(request.conversationId);
       if (typeof request.requestId !== 'string' || !request.requestId || request.requestId.length > 200 || typeof request.goal !== 'string' || !request.goal.trim() || request.goal.length > 100000 || !Array.isArray(request.authorizedTools) || !request.authorizedTools.every((tool) => typeof tool === 'string')) throw new Error('任务目标、身份或授权格式不合法');
-      return agent.start(conversationId, request.requestId, request.goal, request.authorizedTools);
+      const options: ScienceOptions = { workflow: request.workflow === 'd2p_local' ? 'd2p_local' : 'validation' };
+      if (request.workflow && !['validation', 'd2p_local'].includes(String(request.workflow))) throw new Error('未知任务模式');
+      if (request.workflow === 'd2p_local') {
+        const parameters = request.parameters as Record<string, unknown> | undefined;
+        if (!parameters || !['preserve', 'add'].includes(String(parameters.stopPolicy)) || typeof parameters.avoid !== 'string' || parameters.avoid.length > 2000 || typeof request.inputVersionId !== 'string') throw new Error('本地专项参数不完整');
+        options.parameters = { stopPolicy: parameters.stopPolicy as 'preserve' | 'add', avoid: parameters.avoid };
+        options.inputVersionId = request.inputVersionId;
+        options.specialtyAcknowledged = request.specialtyAcknowledged === true;
+      }
+      return agent.start(conversationId, request.requestId, request.goal, request.authorizedTools, options);
     }
+    case 'task.cancel': return agent.cancel(String(request.taskId));
+    case 'task.artifact': return agent.artifact(String(request.taskId), String(request.executionId), String(request.name));
     case 'conversation.status': return agent.conversation(await chatId(request.conversationId));
     case 'close': await harness.close(ctx); return { closed: true };
     default: throw new Error('unsupported operation');

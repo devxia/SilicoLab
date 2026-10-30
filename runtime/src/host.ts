@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { dirname, join, resolve } from 'node:path';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import { createLocalAgent } from './agent.ts';
-import type { ScienceOptions } from './science.ts';
+import { closeScience, type ScienceOptions } from './science.ts';
 import { defineDoc, Harness, type ConversationId } from '@earendil-works/pi-durable';
 import { openNodeSqliteStorage } from '@earendil-works/pi-durable/storage/sqlite/node';
 import { ProjectFiles, type ImportedFile, type InputVersion } from './inputs.ts';
@@ -38,6 +38,7 @@ durable = harness;
 const existing = await harness.snapshot(Project, ctx);
 if (!existing && mode !== 'create') { await harness.close(ctx); throw new Error('project identity missing'); }
 await harness.commit((tx) => tx.doc(Project), ctx);
+await agent.reconcileOpen();
 
 async function snapshot() {
   const project = (await harness.snapshot(Project, ctx))!;
@@ -51,6 +52,7 @@ async function chatId(value: unknown) {
   if (id === undefined) throw new Error('对话不存在');
   return id;
 }
+let stopAfterResponse = false;
 async function dispatch(request: Record<string, unknown>) {
   switch (request.op) {
     case 'status': return snapshot();
@@ -122,10 +124,16 @@ async function dispatch(request: Record<string, unknown>) {
     }
     case 'task.answer': return agent.answer(String(request.taskId), String(request.decisionId), String(request.answer));
     case 'task.continue': return agent.continueTask(String(request.taskId));
+    case 'task.pause': {
+      const prepared = await agent.preparePause(String(request.taskId));
+      if (prepared.needsClose) { await harness.close(ctx); closeScience(); stopAfterResponse = true; return { pausedHost: true, taskId: request.taskId }; }
+      return prepared.task;
+    }
+    case 'task.resume': return agent.resume(String(request.taskId));
     case 'task.cancel': return agent.cancel(String(request.taskId));
     case 'task.artifact': return agent.artifact(String(request.taskId), String(request.executionId), String(request.name));
     case 'conversation.status': return agent.conversation(await chatId(request.conversationId));
-    case 'close': await harness.close(ctx); return { closed: true };
+    case 'close': await harness.close(ctx); closeScience(); return { closed: true };
     default: throw new Error('unsupported operation');
   }
 }
@@ -137,7 +145,7 @@ try {
     try {
       const request = JSON.parse(line); id = request.id;
       console.log(JSON.stringify({ id, result: await dispatch(request) }));
-      if (request.op === 'close') break;
+      if (request.op === 'close' || stopAfterResponse) break;
     } catch (error) { console.log(JSON.stringify({ id, error: String(error) })); }
   }
-} finally { await harness.close(ctx); lines.close(); }
+} finally { await harness.close(ctx); closeScience(); lines.close(); }

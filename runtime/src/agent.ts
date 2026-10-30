@@ -13,7 +13,7 @@ const ctx = BACKGROUND_CONTEXT;
 type Artifact = { path: string; sha256: string; size: number; name?: string; mediaType?: string };
 type ExecutionResult = { characters: number } | ScienceResult;
 type Execution = { id: string; toolTaskId: number; callId: string; tool: string; input: string; progress: number; status: string; error?: string; pythonPid?: number; artifact?: Artifact; artifacts?: Artifact[]; result?: ExecutionResult };
-export type ResearchTask = ScienceOptions & { id: string; conversationId: string; requestId: string; goal: string; status: string; authorizedTools: string[]; createdAt: string; submissionId?: SubmissionId; toolExecutions: Execution[]; error?: string; decisions?: TaskDecision[]; admission?: { authorizedTools: string[]; options: ScienceOptions }; preflight?: { missingStopNames: string[]; inputVersionId: string } };
+export type ResearchTask = ScienceOptions & { id: string; conversationId: string; requestId: string; goal: string; status: string; authorizedTools: string[]; createdAt: string; submissionId?: SubmissionId; toolExecutions: Execution[]; error?: string; pauseReason?: string; decisions?: TaskDecision[]; admission?: { authorizedTools: string[]; options: ScienceOptions }; preflight?: { missingStopNames: string[]; inputVersionId: string } };
 const Ledger = defineDoc<{ tasks: ResearchTask[]; modelRequests: number }>({
   kind: 'silicolab.tasks', version: 1, scope: 'session', initial: () => ({ tasks: [], modelRequests: 0 }), checkpointWhen: () => true,
 });
@@ -25,16 +25,20 @@ export function createLocalAgent(directory: string, getInputs: (id: string, conv
   const files = new ProjectFiles(directory);
   const models = createModels();
   const registry = createRegistry();
-  const faux = fauxProvider({ tokensPerSecond: 80 });
+  const faux = fauxProvider({ tokensPerSecond: 30 });
   models.setProvider(faux.provider);
-  const response: Parameters<typeof faux.setResponses>[0][number] = async (transcript) => {
+  const response: Parameters<typeof faux.setResponses>[0][number] = async (transcript, options) => {
     faux.appendResponses([response]);
     await harness.commit(async (tx) => { (await tx.doc(Ledger)).modelRequests++; }, ctx);
     const last = transcript.messages.at(-1);
-    if (last?.role === 'toolResult') return fauxAssistantMessage(last.isError
-      ? '工具未完成，请查看实际错误和保留记录。模型答复不代表科研成功。'
-      : last.toolName === 'd2p_local' ? '本地 D2P 专项已返回实际结果，请核对逐项校验和科研产物；表达效果仍需实验验证。'
-      : '本机人工文本计数已生成可检查结果。这是验证模型，不是科研结论。');
+    if (last?.role === 'toolResult') {
+      // Faux adapter models an observable, cancellable in-flight final request.
+      await delay(500, undefined, { signal: options?.signal });
+      return fauxAssistantMessage(last.isError
+        ? '工具未完成，请查看实际错误和保留记录。模型答复不代表科研成功。'
+        : last.toolName === 'd2p_local' ? '本地 D2P 专项已返回实际结果，请核对逐项校验和科研产物；表达效果仍需实验验证。'
+        : '本机人工文本计数已生成可检查结果。这是验证模型，不是科研结论。');
+    }
     const user = transcript.messages.findLast((entry) => entry.role === 'user');
     const text = user?.role === 'user' && typeof user.content === 'string' ? user.content : '';
     const active = (await harness.inspect(ctx)).submissions.filter((submission) => submission.type === 'input' && submission.status === 'placed');
@@ -45,12 +49,24 @@ export function createLocalAgent(directory: string, getInputs: (id: string, conv
   };
   faux.setResponses([response]);
 
+  async function verifyCompleted(execution: Execution, message: string) {
+    for (const stored of [...(execution.artifacts || []), ...(execution.artifact ? [execution.artifact] : [])]) {
+      const bytes = await files.read(stored.path);
+      if (createHash('sha256').update(bytes).digest('hex') !== stored.sha256) throw new Error(message);
+    }
+  }
   async function tracked(tool: string, input: string, api: ToolExecutionApi, context: Context,
     work: (task: ResearchTask, id: string, progress: (value: number, pythonPid?: number) => Promise<void>) => Promise<{ result: ExecutionResult; artifact?: Artifact; artifacts?: Artifact[]; isError?: boolean; error?: string }>) {
     const live = await harness.snapshot(LiveDoc, api.conversationId, ctx);
     if (live?.run?.inputs.length !== 1) throw new Error('工具无法关联唯一内核输入');
     const task = await taskForSubmission(api.conversationId, live.run.inputs[0]);
     if (!task.authorizedTools.includes(tool)) throw new Error('需要用户决定：当前任务未授权所需工具');
+    const completed = task.toolExecutions.find((execution) => execution.toolTaskId === api.taskId && execution.status === 'completed');
+    if (completed?.result) {
+      await verifyCompleted(completed, '完成步骤产物完整性不符，需先核对');
+      const summary = 'records' in completed.result ? { status: completed.result.status, records: completed.result.records.length } : completed.result;
+      return { isError: false, output: [{ type: 'text' as const, text: JSON.stringify(summary) }], details: { result: completed.result, reused: true } };
+    }
     const id = randomUUID();
     await api.commit(async (tx) => {
       (await tx.doc(Ledger)).tasks.find((item) => item.id === task.id)!.toolExecutions.push({ id, toolTaskId: api.taskId, callId: api.callId, tool, input, status: 'running', progress: 0 });
@@ -75,7 +91,7 @@ export function createLocalAgent(directory: string, getInputs: (id: string, conv
       }, context);
       // Only bounded summary goes to the model. Full scientific records remain task evidence.
       const summary = 'records' in outcome.result ? { status: outcome.result.status, records: outcome.result.records.length } : outcome.result;
-      return { isError: outcome.isError || false, output: [{ type: 'text' as const, text: JSON.stringify(summary) }], details: { result: outcome.result } };
+      return { isError: outcome.isError || false, output: [{ type: 'text' as const, text: JSON.stringify(summary) }], details: { result: outcome.result, reused: false } };
     } catch (error) {
       if (!context.abortSignal?.aborted) await api.commit(async (tx) => {
         const execution = (await tx.doc(Ledger)).tasks.find((item) => item.id === task.id)!.toolExecutions.find((item) => item.id === id)!;
@@ -192,6 +208,52 @@ export function createLocalAgent(directory: string, getInputs: (id: string, conv
     }).catch(() => { /* Opening never resumes pending work. */ });
     return { ...task, submissionId: submission.id, status: 'running' };
   }
+  async function reconcileOpen() {
+    const saved = await tasks();
+    const changes: { id: string; status: string; reason?: string }[] = [];
+    for (const task of saved) {
+      if (!['running', 'pausing'].includes(task.status)) continue;
+      const submitted = await harness.commit((tx) => tx.submissionByRequest(Number(task.conversationId) as ConversationId, task.requestId), ctx);
+      changes.push({ id: task.id, status: submitted?.status === 'done' ? 'answered' : 'paused',
+        reason: task.status === 'pausing' ? '用户暂停；本机执行已停止' : '宿主中断或退出；等待明确恢复' });
+    }
+    if (changes.length) await harness.commit(async (tx) => {
+      const ledger = await tx.doc(Ledger);
+      for (const change of changes) {
+        const task = ledger.tasks.find((task) => task.id === change.id)!;
+        task.status = change.status;
+        if (change.status === 'paused') {
+          task.pauseReason = change.reason!;
+          for (const execution of task.toolExecutions) if (execution.status === 'running') execution.status = 'paused';
+        }
+      }
+    }, ctx);
+  }
+  async function preparePause(taskId: string) {
+    const task = (await tasks()).find((task) => task.id === taskId);
+    if (!task) throw new Error('任务不存在');
+    if (task.status !== 'running') return { needsClose: false, task };
+    await harness.commit(async (tx) => { (await tx.doc(Ledger)).tasks.find((task) => task.id === taskId)!.status = 'pausing'; }, ctx);
+    return { needsClose: true, taskId };
+  }
+  async function resume(taskId: string) {
+    const task = (await tasks()).find((task) => task.id === taskId);
+    if (!task) throw new Error('任务不存在');
+    if (task.status !== 'paused') return task;
+    const pending = await harness.inspect(ctx);
+    if (pending.tasks.some((item) => String(item.record.conversationId) !== task.conversationId)) throw new Error('存在其他未获选择的执行，不能整体恢复');
+    const blocked = pending.tasks.find((item) => String(item.record.conversationId) === task.conversationId && item.state.kind === 'blocked');
+    if (blocked?.state.kind === 'blocked') {
+      const reason = `内核执行已停放：${blocked.state.reason}；未启动恢复，请先检查中断原因`;
+      await harness.commit(async (tx) => { (await tx.doc(Ledger)).tasks.find((item) => item.id === taskId)!.pauseReason = reason; }, ctx);
+      throw new Error(reason);
+    }
+    if (task.workflow === 'd2p_local') await getInputs(task.inputVersionId!, task.conversationId);
+    for (const execution of task.toolExecutions) if (execution.status === 'completed') {
+      await verifyCompleted(execution, '完成产物已改变，恢复前需核对');
+    }
+    return launch(task);
+  }
   async function continueTask(taskId: string) {
     const task = (await tasks()).find((item) => item.id === taskId);
     if (!task) throw new Error('任务不存在');
@@ -261,6 +323,6 @@ export function createLocalAgent(directory: string, getInputs: (id: string, conv
       tasks: (await tasks()).filter((task) => task.conversationId === String(conversationId)), modelRequests: (await harness.snapshot(Ledger, ctx))?.modelRequests || 0,
       scheduling: (await harness.inspect(ctx)).scheduling };
   }
-  return { models, registry, bind(value: Harness) { harness = value; }, start, tasks, conversation, cancel, artifact, answer, continueTask,
+  return { models, registry, bind(value: Harness) { harness = value; }, start, tasks, conversation, cancel, artifact, answer, continueTask, reconcileOpen, preparePause, resume,
     async modelRequests() { return (await harness.snapshot(Ledger, ctx))?.modelRequests || 0; } };
 }

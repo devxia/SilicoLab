@@ -88,6 +88,18 @@ worker 的网络拒绝钩子只针对可信科学入口，不能代替不可信 
 .venv/bin/python -B tests/e2e/browser_workbench_decisions.py
 ```
 
+## 暂停与逐项恢复
+
+[#10 恢复契约](task-recovery.md) 提供对话/任务面板的真实暂停和明确选择恢复。暂停先关闭内核并回收受管科学进程，核对后再显示 paused；Node 强制退出时，应用持有的 socketpair 科学监督器回收其 worker。重开不自动执行，恢复核对固定输入与完成产物，复用完成项、重做未完成步骤。
+
+```bash
+.venv/bin/python -B -m unittest discover -s backend/tests -p test_workbench_recovery.py -v
+# 复用8767临时夹具
+.venv/bin/python -B tests/e2e/browser_workbench_recovery.py
+```
+
+源码模式验证不代表 .app 关窗继续/完全退出和随包运行时已经通过；正式生命周期及分发仍有独立任务。
+
 ## 常规检查
 
 ```bash

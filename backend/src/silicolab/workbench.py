@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import select
 import shutil
+import socket
 import subprocess
 import sys
 import threading
@@ -79,6 +80,7 @@ class ProjectHost:
                 raise ValueError('项目状态文件不能是符号链接')
         self._lease = (self.state / 'owner.lock').open('a')
         self._process = None
+        self._supervisor = None
         self._serial = threading.Lock()
         self._next = 0
         try:
@@ -89,10 +91,23 @@ class ProjectHost:
                 raise ValueError('智能体运行时未安装，请按开发文档安装 runtime 依赖')
             env = {'PATH': os.environ.get('PATH', '/usr/bin:/bin'), 'LANG': 'en_US.UTF-8',
                    'SILICOLAB_PYTHON': sys.executable, 'SILICOLAB_BACKEND': str(Path(__file__).resolve().parent.parent)}
-            self._process = subprocess.Popen([node, str(runtime / 'src/host.ts'), str(self.state),
-                                              'create' if create else 'open', name],
-                                             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                                             text=True, bufsize=1, close_fds=True, pass_fds=(self._lease.fileno(),), env=env)
+            node_channel, supervisor_channel = socket.socketpair()
+            try:
+                self._supervisor = subprocess.Popen([sys.executable, '-I', '-B', '-c',
+                                                     'import sys;sys.path.insert(0,sys.argv[1]);from silicolab.science_supervisor import main;main(int(sys.argv[2]))',
+                                                     str(Path(__file__).resolve().parent.parent), str(supervisor_channel.fileno())],
+                                                    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                                    env={'PATH': '/usr/bin:/bin', 'LANG': 'en_US.UTF-8'}, close_fds=True,
+                                                    pass_fds=(supervisor_channel.fileno(),))
+                env['SILICOLAB_SCIENCE_FD'] = str(node_channel.fileno())
+                self._process = subprocess.Popen([node, str(runtime / 'src/host.ts'), str(self.state),
+                                                  'create' if create else 'open', name],
+                                                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                                 text=True, bufsize=1, close_fds=True,
+                                                 pass_fds=(self._lease.fileno(), node_channel.fileno()), env=env)
+            finally:
+                node_channel.close()
+                supervisor_channel.close()
             if not self._read().get('ready'):
                 raise ValueError('智能体宿主未就绪')
         except BaseException:
@@ -122,7 +137,7 @@ class ProjectHost:
             return response['result']
 
     def alive(self):
-        return self._process is not None and self._process.poll() is None
+        return self._process is not None and self._process.poll() is None and self._supervisor is not None and self._supervisor.poll() is None
 
     def close(self):
         if self._process:
@@ -135,6 +150,12 @@ class ProjectHost:
                     self._process.wait(timeout=5)
             self._process.stdin.close()
             self._process.stdout.close()
+        if self._supervisor:
+            try:
+                self._supervisor.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                self._supervisor.kill()
+                self._supervisor.wait(timeout=5)
         if not self._lease.closed:
             self._lease.close()
 
@@ -209,7 +230,15 @@ class Workbench:
             if item is None:
                 raise ValueError('项目不存在')
             self.open(item['path'], expected_id=project_id)
-            result = self._hosts[str(Path(item['path']).resolve())].call(op, **values)
+            canonical = str(Path(item['path']).resolve())
+            host = self._hosts[canonical]
+            result = host.call(op, **values)
+            if op == 'task.pause' and result.get('pausedHost'):
+                # The kernel acknowledged close; join Node and the application-owned science supervisor.
+                host.close()
+                del self._hosts[canonical]
+                snapshot = self.open(item['path'], expected_id=project_id)
+                return next(task for task in snapshot['tasks'] if task['id'] == values['taskId'])
             return {**result, 'path': item['path']} if op == 'status' else result
 
     def close(self):
@@ -280,6 +309,14 @@ def router(workbench):
     @routes.post('/projects/{project_id}/tasks/{task_id}/continue')
     def continue_task(project_id: str, task_id: str):
         return invoke(workbench.call, project_id, 'task.continue', taskId=task_id)
+
+    @routes.post('/projects/{project_id}/tasks/{task_id}/pause')
+    def pause_task(project_id: str, task_id: str):
+        return invoke(workbench.call, project_id, 'task.pause', taskId=task_id)
+
+    @routes.post('/projects/{project_id}/tasks/{task_id}/resume')
+    def resume_task(project_id: str, task_id: str):
+        return invoke(workbench.call, project_id, 'task.resume', taskId=task_id)
 
     @routes.post('/projects/{project_id}/tasks/{task_id}/cancel')
     def cancel_task(project_id: str, task_id: str):

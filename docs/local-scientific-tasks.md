@@ -24,7 +24,7 @@ Excel 继续只有“基因合成”工作表，“序号、合成名、核酸�
 
 ## 取消与失败
 
-`POST /api/workbench/projects/<project>/tasks/<task>/cancel` 明确取消当前本机任务；Node 的受管 Python 在 AbortSignal 或60秒执行超时时被 SIGKILL，等待进程关闭后返回，不把发送信号当作已回收。应用任务与执行尝试保存 cancelled，错误有持久失败和原因，不自动上传或重复提交。已完成任务取消是幂等观察，不删除产物。
+应用持有科学监督进程，Node 通过继承 socketpair 以 JSON 提交固定入口请求，清洁环境/网络拒绝与实际 PID 回收见 [task-recovery.md](task-recovery.md)。模型 key 不进入 worker；Node 强制终止时，仍存活的监督器也会终止并 wait 其受管 worker。`POST /api/workbench/projects/<project>/tasks/<task>/cancel` 明确取消当前本机任务；监督器在 AbortSignal 或60秒执行超时后 SIGKILL 并等待回收 worker，返回明确结果。已完成任务取消是幂等观察，不删除产物。
 
 可信科学 worker 本身不创建派生进程。此处不是任意脚本执行边界；**Python audit hook 不是对不可信代码的系统沙箱**。生成代码仍必须经过 #3/#16 的受限执行与分发验收，不能把本工具或其干净环境当作替代。宿主强制终止和多任务恢复仍由各自后续生命周期任务验收。
 

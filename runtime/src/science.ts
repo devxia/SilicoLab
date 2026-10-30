@@ -1,44 +1,57 @@
-import { spawn } from 'node:child_process';
+import { Socket } from 'node:net';
+import { createInterface } from 'node:readline';
+import { randomUUID } from 'node:crypto';
 
 export type ScienceParameters = { stopPolicy: 'preserve' | 'add' | 'ask'; avoid: string };
 export type ScienceOptions = { workflow?: 'validation' | 'd2p_local'; specialtyAcknowledged?: boolean; inputVersionId?: string; parameters?: ScienceParameters };
 export type ScienceRecord = { name: string; protein: string; status: string; dna?: string; error?: string; checks?: Record<string, boolean> };
 export type ScienceResult = { status: string; inputVersionId: string; engine_info: Record<string, string | number | boolean>; records: ScienceRecord[]; network_attempts: number; network_guard_self_test: string; scope: string; missingStopNames?: string[] };
 export type ScienceResponse = { ok: boolean; error?: string; result: ScienceResult; files: { name: string; mediaType: string; contentBase64: string }[] };
-
-/** Spawn only the trusted packaged scientific entry, never model-authored Python. */
-export async function runScience(request: unknown, signal: AbortSignal | undefined, started: (pid: number) => Promise<void>): Promise<ScienceResponse> {
-  const python = process.env.SILICOLAB_PYTHON;
-  const backend = process.env.SILICOLAB_BACKEND;
-  if (!python || !backend) throw new Error('科学 Python 运行时未配置');
-  if (signal?.aborted) throw new Error('科学任务已取消');
-  const child = spawn(python, ['-I', '-B', '-c', 'import sys;sys.path.insert(0,sys.argv[1]);from silicolab.science_worker import main;main()', backend], {
-    env: { PATH: '/usr/bin:/bin', LANG: 'en_US.UTF-8' }, stdio: ['pipe', 'pipe', 'pipe'],
+type Pending = { resolve: (value: ScienceResponse) => void; reject: (error: Error) => void; started: (pid: number) => Promise<void>; failure?: Error; cleanup: () => void };
+let channel: Socket | undefined;
+const pending = new Map<string, Pending>();
+function connection() {
+  if (channel) return channel;
+  const fd = Number(process.env.SILICOLAB_SCIENCE_FD);
+  if (!Number.isInteger(fd) || fd < 0) throw new Error('科学执行监督器未配置');
+  channel = new Socket({ fd, readable: true, writable: true });
+  const incoming = createInterface({ input: channel });
+  incoming.on('line', (line) => {
+    try {
+      const message = JSON.parse(line);
+      const job = pending.get(message.id);
+      if (!job) return;
+      if (message.event === 'started') {
+        void job.started(message.pid).catch((error) => { job.failure = error; channel!.write(JSON.stringify({ id: message.id, op: 'cancel' }) + '\n'); });
+      } else if (message.event === 'finished') {
+        pending.delete(message.id); job.cleanup();
+        if (job.failure || message.error || !message.response?.ok) job.reject(job.failure || new Error(message.error || message.response?.error || '科学工具未完成'));
+        else if (!Array.isArray(message.response.result?.records) || !Array.isArray(message.response.files)) job.reject(new Error('科学响应协议不完整'));
+        else job.resolve(message.response);
+      }
+    } catch { channel!.destroy(new Error('科学监督器响应无效')); }
   });
-  let stdout = '', stderr = '';
-  return await new Promise<ScienceResponse>((resolve, reject) => {
-    let failure: Error | undefined;
-    const abort = () => { failure = new Error('科学任务已取消'); child.kill('SIGKILL'); };
-    const timeout = setTimeout(() => { failure = new Error('科学工具执行超时'); child.kill('SIGKILL'); }, 60000);
-    signal?.addEventListener('abort', abort, { once: true });
-    child.on('error', (error) => { failure = error; });
-    child.stdin.on('error', (error) => { if (!failure) failure = error; });
-    child.stdout.on('data', (chunk) => {
-      stdout += chunk;
-      if (Buffer.byteLength(stdout) > 16 * 1024 * 1024) { failure = new Error('科学输出超过协议上限'); child.kill('SIGKILL'); }
-    });
-    child.stderr.on('data', (chunk) => { stderr = (stderr + chunk).slice(-8000); });
-    child.on('close', (code) => {
-      clearTimeout(timeout); signal?.removeEventListener('abort', abort);
-      if (failure) { reject(failure); return; }
-      if (code !== 0) { reject(new Error(`科学进程失败 (${code}): ${stderr}`)); return; }
-      try {
-        const response = JSON.parse(stdout) as ScienceResponse;
-        if (!response.ok) throw new Error(response.error || '科学工具未完成');
-        if (!Array.isArray(response.result.records) || !Array.isArray(response.files)) throw new Error('科学响应协议不完整');
-        resolve(response);
-      } catch (error) { reject(error); }
-    });
-    if (child.pid) void started(child.pid).then(() => child.stdin.end(JSON.stringify(request))).catch((error) => { failure = error; child.kill('SIGKILL'); });
+  const failed = (error: Error) => {
+    for (const job of pending.values()) { job.cleanup(); job.reject(error); }
+    pending.clear();
+  };
+  channel.on('error', failed);
+  channel.on('close', () => { incoming.close(); failed(new Error('科学监督连接已关闭')); });
+  channel.unref();
+  return channel;
+}
+
+/** The application-owned supervisor reaps scientific children even if Node dies. */
+export async function runScience(request: unknown, signal: AbortSignal | undefined, started: (pid: number) => Promise<void>): Promise<ScienceResponse> {
+  if (signal?.aborted) throw new Error('科学任务已取消');
+  const socket = connection();
+  const id = randomUUID();
+  return new Promise((resolve, reject) => {
+    const cancel = () => { const job = pending.get(id); if (job) { job.failure = new Error('科学任务已停止'); socket.write(JSON.stringify({ id, op: 'cancel' }) + '\n'); } };
+    const timer = setTimeout(cancel, 60000);
+    signal?.addEventListener('abort', cancel, { once: true });
+    pending.set(id, { resolve, reject, started, cleanup: () => { clearTimeout(timer); signal?.removeEventListener('abort', cancel); } });
+    socket.write(JSON.stringify({ id, op: 'start', request }) + '\n');
   });
 }
+export function closeScience() { channel?.end(); }

@@ -112,6 +112,18 @@ worker 的网络拒绝钩子只针对可信科学入口，不能代替不可信 
 
 当前4打开项目host、每项目1active、100未完成任务、8缓存运行存储上限有明确拒绝/回收规则，详见契约和ADR0002，不承诺无限并发。
 
+## 模拟独立外部作业
+
+[#12 模拟执行器](simulated-external-jobs.md) 使用回环假服务和独立SQLite保存稳定请求/job身份。真实HTTP演练接受后回执丢失、Node中断后先对账、无查询能力等待决定、结果回队，以及本机暂停/退出不取消独立作业。仅人工文本，不连接真实科学远端。
+
+```bash
+.venv/bin/python -B -m unittest discover -s backend/tests -p test_workbench_external.py -v
+# 复用8767临时夹具
+.venv/bin/python -B tests/e2e/browser_workbench_external.py
+```
+
+应用数据旁 `simulated-executor.sqlite3` 是独立验证服务的状态，不属于真实科研项目结果；它不会在退出时删除或自动取消作业。任务面板有明显模拟标记，公开请求不能指定任意端点。
+
 ## 常规检查
 
 ```bash

@@ -111,8 +111,8 @@ async function dispatch(request: Record<string, unknown>) {
     case 'task.start': {
       const conversationId = await chatId(request.conversationId);
       if (typeof request.requestId !== 'string' || !request.requestId || request.requestId.length > 200 || typeof request.goal !== 'string' || !request.goal.trim() || request.goal.length > 100000 || !Array.isArray(request.authorizedTools) || !request.authorizedTools.every((tool) => typeof tool === 'string')) throw new Error('任务目标、身份或授权格式不合法');
-      const options: ScienceOptions = { workflow: request.workflow === 'd2p_local' ? 'd2p_local' : 'validation' };
-      if (request.workflow && !['validation', 'd2p_local'].includes(String(request.workflow))) throw new Error('未知任务模式');
+      const options: ScienceOptions = { workflow: request.workflow === 'd2p_local' ? 'd2p_local' : request.workflow === 'simulated_external' ? 'simulated_external' : 'validation' };
+      if (request.workflow && !['validation', 'd2p_local', 'simulated_external'].includes(String(request.workflow))) throw new Error('未知任务模式');
       if (request.workflow === 'd2p_local') {
         const parameters = request.parameters as Record<string, unknown> | undefined;
         if (!parameters || !['preserve', 'add', 'ask'].includes(String(parameters.stopPolicy)) || typeof parameters.avoid !== 'string' || parameters.avoid.length > 2000 || typeof request.inputVersionId !== 'string') throw new Error('本地专项参数不完整');
@@ -120,8 +120,15 @@ async function dispatch(request: Record<string, unknown>) {
         options.inputVersionId = request.inputVersionId;
         options.specialtyAcknowledged = request.specialtyAcknowledged === true;
       }
+      if (request.workflow === 'simulated_external') {
+        const simulation = request.simulation as Record<string, unknown> | undefined;
+        if (!simulation || typeof simulation.payload !== 'string' || simulation.payload.length > 10000 || !Number.isInteger(simulation.durationMs) || Number(simulation.durationMs) < 0 || Number(simulation.durationMs) > 60000 || typeof simulation.queryable !== 'boolean' || !['normal', 'lost', 'hold_after_accept'].includes(String(simulation.responseMode))) throw new Error('模拟外部作业参数不合法');
+        options.simulation = { payload: simulation.payload, durationMs: Number(simulation.durationMs), queryable: simulation.queryable, responseMode: simulation.responseMode as 'normal' | 'lost' | 'hold_after_accept' };
+      }
       return agent.start(conversationId, request.requestId, request.goal, request.authorizedTools, options);
     }
+    case 'external.reconcile': return agent.reconcileExternal(String(request.taskId));
+    case 'external.cancel': return agent.cancelExternal(String(request.taskId));
     case 'task.answer': return agent.answer(String(request.taskId), String(request.decisionId), String(request.answer));
     case 'task.continue': return agent.continueTask(String(request.taskId));
     case 'task.pause': {

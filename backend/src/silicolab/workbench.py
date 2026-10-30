@@ -34,12 +34,20 @@ class ScienceParameters(BaseModel):
     avoid: str = Field(default='', max_length=2000)
 
 
+class SimulationInput(BaseModel):
+    payload: str = Field(max_length=10000)
+    durationMs: int = Field(default=1000, ge=0, le=60000)
+    queryable: bool = True
+    responseMode: Literal['normal', 'lost', 'hold_after_accept'] = 'normal'
+
+
 class TaskInput(BaseModel):
     conversationId: str = Field(min_length=1, max_length=100)
     requestId: str = Field(min_length=1, max_length=200)
     goal: str = Field(min_length=1, max_length=100000)
     authorizedTools: list[str] = Field(default_factory=list, max_length=20)
-    workflow: Literal['validation', 'd2p_local'] = 'validation'
+    workflow: Literal['validation', 'd2p_local', 'simulated_external'] = 'validation'
+    simulation: SimulationInput | None = None
     specialtyAcknowledged: bool = False
     inputVersionId: str | None = Field(default=None, max_length=100)
     parameters: ScienceParameters | None = None
@@ -65,7 +73,7 @@ class DraftInput(BaseModel):
 
 
 class ProjectHost:
-    def __init__(self, path, create, name):
+    def __init__(self, path, create, name, simulated):
         self.path = Path(path).resolve(strict=True)
         if not self.path.is_dir():
             raise ValueError('请选择存在的项目目录')
@@ -91,6 +99,8 @@ class ProjectHost:
                 raise ValueError('智能体运行时未安装，请按开发文档安装 runtime 依赖')
             env = {'PATH': os.environ.get('PATH', '/usr/bin:/bin'), 'LANG': 'en_US.UTF-8',
                    'SILICOLAB_PYTHON': sys.executable, 'SILICOLAB_BACKEND': str(Path(__file__).resolve().parent.parent)}
+            env['SILICOLAB_SIMULATED_EXECUTOR'] = simulated.url
+            env['SILICOLAB_SIMULATED_EXECUTOR_ID'] = simulated.info()['serviceId']
             node_channel, supervisor_channel = socket.socketpair()
             try:
                 self._supervisor = subprocess.Popen([sys.executable, '-I', '-B', '-c',
@@ -166,6 +176,7 @@ class Workbench:
         self._hosts = {}
         self._lock = threading.RLock()
         self._index_error = None
+        self._simulated = None
         try:
             self._projects = json.loads(self.index.read_text())
             if not isinstance(self._projects, list) or any(
@@ -178,6 +189,13 @@ class Workbench:
         except (OSError, ValueError):
             self._projects = []
             self._index_error = '项目索引无法读取；原文件已保留，请明确重新打开项目目录恢复关联'
+
+    def simulated(self):
+        with self._lock:
+            if self._simulated is None:
+                from silicolab.simulated_executor import SimulatedExecutor
+                self._simulated = SimulatedExecutor(self.index.with_name('simulated-executor.sqlite3'))
+            return self._simulated
 
     def list(self):
         with self._lock:
@@ -197,7 +215,7 @@ class Workbench:
             if fresh:
                 if len(self._hosts) >= 4:
                     raise ValueError('当前最多打开4个项目宿主；请结束并重新打开应用选择项目')
-                host = ProjectHost(canonical, create, name)
+                host = ProjectHost(canonical, create, name, self.simulated())
                 self._hosts[canonical] = host
             try:
                 snapshot = host.call('status')
@@ -252,6 +270,9 @@ class Workbench:
             for host in self._hosts.values():
                 host.close()
             self._hosts.clear()
+            if self._simulated:
+                self._simulated.close()
+                self._simulated = None
 
 
 def router(workbench):
@@ -315,6 +336,18 @@ def router(workbench):
     @routes.post('/projects/{project_id}/tasks/{task_id}/continue')
     def continue_task(project_id: str, task_id: str):
         return invoke(workbench.call, project_id, 'task.continue', taskId=task_id)
+
+    @routes.get('/simulated-executor')
+    def simulated_executor_status():
+        return workbench.simulated().info()
+
+    @routes.post('/projects/{project_id}/tasks/{task_id}/external/reconcile')
+    def reconcile_external(project_id: str, task_id: str):
+        return invoke(workbench.call, project_id, 'external.reconcile', taskId=task_id)
+
+    @routes.post('/projects/{project_id}/tasks/{task_id}/external/cancel')
+    def cancel_external(project_id: str, task_id: str):
+        return invoke(workbench.call, project_id, 'external.cancel', taskId=task_id)
 
     @routes.post('/projects/{project_id}/tasks/{task_id}/pause')
     def pause_task(project_id: str, task_id: str):

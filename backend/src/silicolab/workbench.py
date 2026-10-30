@@ -1,5 +1,7 @@
 """Project application contract; one owner and real durable Node host per project."""
+import asyncio
 import fcntl
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -9,7 +11,8 @@ import subprocess
 import threading
 import uuid
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 
@@ -20,6 +23,13 @@ class ProjectPath(BaseModel):
 
 class ConversationTitle(BaseModel):
     title: str = Field(min_length=1, max_length=200)
+
+
+class TaskInput(BaseModel):
+    conversationId: str = Field(min_length=1, max_length=100)
+    requestId: str = Field(min_length=1, max_length=200)
+    goal: str = Field(min_length=1, max_length=100000)
+    authorizedTools: list[str] = Field(default_factory=list, max_length=20)
 
 
 class ImportFile(BaseModel):
@@ -241,5 +251,36 @@ def router(workbench):
     @routes.get('/projects/{project_id}/input-versions/{version_id}')
     def fixed_inputs(project_id: str, version_id: str):
         return invoke(workbench.call, project_id, 'input.read', versionId=version_id)
+
+    @routes.post('/projects/{project_id}/tasks', status_code=201)
+    def start_task(project_id: str, body: TaskInput):
+        return invoke(workbench.call, project_id, 'task.start', conversationId=body.conversationId,
+                      requestId=body.requestId, goal=body.goal, authorizedTools=body.authorizedTools)
+
+    @routes.get('/projects/{project_id}/conversations/{conversation_id}')
+    def conversation_status(project_id: str, conversation_id: str):
+        return invoke(workbench.call, project_id, 'conversation.status', conversationId=conversation_id)
+
+    @routes.get('/projects/{project_id}/conversations/{conversation_id}/events')
+    async def conversation_events(project_id: str, conversation_id: str, request: Request):
+        # Stream committed state snapshots; observing does not admit input or resume tasks.
+        previous = request.headers.get('last-event-id', '')
+        async def stream():
+            nonlocal previous
+            while not await request.is_disconnected() and not request.app.state.stopping.is_set():
+                try:
+                    state = await asyncio.to_thread(workbench.call, project_id, 'conversation.status', conversationId=conversation_id)
+                except (OSError, ValueError, subprocess.SubprocessError) as error:
+                    yield 'event: problem\ndata: ' + json.dumps({'error': str(error)}) + '\n\n'
+                    return
+                content = json.dumps(state, ensure_ascii=False, sort_keys=True)
+                version = hashlib.sha256(content.encode()).hexdigest()
+                if version != previous:
+                    yield f'id: {version}\ndata: {content}\n\n'
+                    previous = version
+                else:
+                    yield ': keepalive\n\n'
+                await asyncio.sleep(0.12)
+        return StreamingResponse(stream(), media_type='text/event-stream', headers={'Cache-Control': 'no-cache'})
 
     return routes

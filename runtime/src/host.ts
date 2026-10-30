@@ -2,8 +2,8 @@ import { createInterface } from 'node:readline';
 import { randomUUID } from 'node:crypto';
 import { dirname, join, resolve } from 'node:path';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
-import { createModels } from '@earendil-works/pi-ai/models';
-import { createRegistry, defineDoc, Harness, type ConversationId } from '@earendil-works/pi-durable';
+import { createLocalAgent } from './agent.ts';
+import { defineDoc, Harness, type ConversationId } from '@earendil-works/pi-durable';
 import { openNodeSqliteStorage } from '@earendil-works/pi-durable/storage/sqlite/node';
 import { ProjectFiles, type ImportedFile, type InputVersion } from './inputs.ts';
 
@@ -20,9 +20,12 @@ const Chat = defineDoc<{ title: string; draft: string; revision: number }>({
   kind: 'silicolab.conversation', version: 1, scope: 'conversation', history: 'latest', fork: 'initial',
   initial: () => ({ title: '新对话', draft: '', revision: 0 }), checkpointWhen: () => true,
 });
+const agent = createLocalAgent(dirname(resolve(directory)));
 const harness = await Harness.open(await openNodeSqliteStorage(join(resolve(directory), 'session.sqlite')), {
-  models: createModels(), registry: createRegistry(),
+  models: agent.models, registry: agent.registry,
+  settings: { compaction: { enabled: false }, retry: { maxRetries: 0 }, restartLimit: 3, progress: { partialIntervalMs: 30, outputIntervalMs: 30 } },
 }, ctx);
+agent.bind(harness);
 const existing = await harness.snapshot(Project, ctx);
 if (!existing && mode !== 'create') { await harness.close(ctx); throw new Error('project identity missing'); }
 await harness.commit((tx) => tx.doc(Project), ctx);
@@ -32,7 +35,7 @@ async function snapshot() {
   const project = (await harness.snapshot(Project, ctx))!;
   const conversations = await Promise.all(project.conversations.map(async (id) => ({ id: String(id), ...(await harness.snapshot(Chat, id, ctx))! })));
   const inspection = await harness.inspect(ctx);
-  return { id: project.id, name: project.name, conversations, files: project.files || [], inputVersions: project.inputVersions || [], tasks: inspection.tasks, scheduling: inspection.scheduling, modelRequests: 0, runtimePid: process.pid };
+  return { id: project.id, name: project.name, conversations, files: project.files || [], inputVersions: project.inputVersions || [], tasks: await agent.tasks(), activeTasks: inspection.tasks, scheduling: inspection.scheduling, modelRequests: await agent.modelRequests(), runtimePid: process.pid };
 }
 async function chatId(value: unknown) {
   const project = (await harness.snapshot(Project, ctx))!;
@@ -95,6 +98,12 @@ async function dispatch(request: Record<string, unknown>) {
       if (!version) throw new Error('输入版本不存在');
       return files.fixed(version);
     }
+    case 'task.start': {
+      const conversationId = await chatId(request.conversationId);
+      if (typeof request.requestId !== 'string' || !request.requestId || request.requestId.length > 200 || typeof request.goal !== 'string' || !request.goal.trim() || request.goal.length > 100000 || !Array.isArray(request.authorizedTools) || !request.authorizedTools.every((tool) => typeof tool === 'string')) throw new Error('任务目标、身份或授权格式不合法');
+      return agent.start(conversationId, request.requestId, request.goal, request.authorizedTools);
+    }
+    case 'conversation.status': return agent.conversation(await chatId(request.conversationId));
     case 'close': await harness.close(ctx); return { closed: true };
     default: throw new Error('unsupported operation');
   }

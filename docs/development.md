@@ -42,6 +42,18 @@ npm --prefix runtime run typecheck
 
 文件区还支持导入用户选定文件、真实预览和固定任务输入版本。导入副本可编辑，已有固定记录使用独立副本、版本号与 SHA-256，不受后续改动影响；失败不报告保存成功，同名文件不覆盖。参见 [项目输入契约](project-inputs.md)。验收入口为 `backend/tests/test_workbench_inputs.py` 和 `tests/e2e/browser_workbench_inputs.py`（同一 8767 临时夹具），浏览器证据在 `outputs/ui/workbench-inputs/`。
 
+## 本机验证模型的真实循环
+
+[主循环契约](agent-loop.md) 对应 #6。对话“运行本机验证”只授权人工文本计数，当前是明确标注的 pi-ai faux 模型驱动真实 pi-durable，不是浏览器假状态。任务、请求、工具、尝试和产物关联保存，SSE 只观察已提交历史/进度，不重发工作；原生后台及实际科学计算仍未交付。
+
+```bash
+.venv/bin/python -B -m unittest discover -s backend/tests -p test_workbench_agent.py -v
+# 与项目输入流程使用相同临时8767夹具
+.venv/bin/python -B tests/e2e/browser_workbench_agent.py
+```
+
+前端构建会替换 `frontend/dist`，应先完成构建再运行后端全量测试/浏览器夹具，避免构建期间资源被暂时移除影响测试。
+
 ## 常规检查
 
 ```bash

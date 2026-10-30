@@ -40,6 +40,8 @@ npm --prefix runtime run typecheck
 
 浏览器验收覆盖真实项目持久化、多个对话、草稿、A+C 布局联动、窄窗口导航及手动专项入口。截图和 JSON 证据保存在被忽略的 `outputs/ui/workbench/`。领域语言见根 GLOSSARY，工程决定见 `docs/adr/`。
 
+文件区还支持导入用户选定文件、真实预览和固定任务输入版本。导入副本可编辑，已有固定记录使用独立副本、版本号与 SHA-256，不受后续改动影响；失败不报告保存成功，同名文件不覆盖。参见 [项目输入契约](project-inputs.md)。验收入口为 `backend/tests/test_workbench_inputs.py` 和 `tests/e2e/browser_workbench_inputs.py`（同一 8767 临时夹具），浏览器证据在 `outputs/ui/workbench-inputs/`。
+
 ## 常规检查
 
 ```bash

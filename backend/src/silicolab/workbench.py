@@ -22,6 +22,16 @@ class ConversationTitle(BaseModel):
     title: str = Field(min_length=1, max_length=200)
 
 
+class ImportFile(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    contentBase64: str = Field(max_length=7 * 1024 * 1024)
+
+
+class FreezeInputs(BaseModel):
+    conversationId: str = Field(min_length=1, max_length=100)
+    fileIds: list[str] = Field(min_length=1, max_length=20)
+
+
 class DraftInput(BaseModel):
     text: str = Field(max_length=100000)
     revision: int = Field(ge=0)
@@ -215,5 +225,21 @@ def router(workbench):
     def draft(project_id: str, conversation_id: str, body: DraftInput):
         return invoke(workbench.call, project_id, 'draft.save', conversationId=conversation_id,
                       text=body.text, revision=body.revision)
+
+    @routes.post('/projects/{project_id}/files', status_code=201)
+    def import_file(project_id: str, body: ImportFile):
+        return invoke(workbench.call, project_id, 'file.import', name=body.name, contentBase64=body.contentBase64)
+
+    @routes.get('/projects/{project_id}/files/{file_id}')
+    def preview_file(project_id: str, file_id: str):
+        return invoke(workbench.call, project_id, 'file.preview', fileId=file_id)
+
+    @routes.post('/projects/{project_id}/input-versions', status_code=201)
+    def freeze_inputs(project_id: str, body: FreezeInputs):
+        return invoke(workbench.call, project_id, 'input.freeze', conversationId=body.conversationId, fileIds=body.fileIds)
+
+    @routes.get('/projects/{project_id}/input-versions/{version_id}')
+    def fixed_inputs(project_id: str, version_id: str):
+        return invoke(workbench.call, project_id, 'input.read', versionId=version_id)
 
     return routes

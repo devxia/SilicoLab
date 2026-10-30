@@ -1,17 +1,18 @@
 import { createInterface } from 'node:readline';
 import { randomUUID } from 'node:crypto';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import { createModels } from '@earendil-works/pi-ai/models';
 import { createRegistry, defineDoc, Harness, type ConversationId } from '@earendil-works/pi-durable';
 import { openNodeSqliteStorage } from '@earendil-works/pi-durable/storage/sqlite/node';
+import { ProjectFiles, type ImportedFile, type InputVersion } from './inputs.ts';
 
 // The Python workbench owner holds the project lease across this process's lifetime.
 // This protocol is private IPC; the application interface is the local workbench HTTP contract.
 const ctx = BACKGROUND_CONTEXT;
 const [directory, mode, name] = process.argv.slice(2);
 if (!directory || !['create', 'open'].includes(mode)) throw new Error('project directory and mode required');
-const Project = defineDoc<{ id: string; name: string; conversations: ConversationId[] }>({
+const Project = defineDoc<{ id: string; name: string; conversations: ConversationId[]; files?: ImportedFile[]; inputVersions?: InputVersion[] }>({
   kind: 'silicolab.project', version: 1, scope: 'session',
   initial: () => ({ id: randomUUID(), name: name || '科研项目', conversations: [] }), checkpointWhen: () => true,
 });
@@ -25,12 +26,13 @@ const harness = await Harness.open(await openNodeSqliteStorage(join(resolve(dire
 const existing = await harness.snapshot(Project, ctx);
 if (!existing && mode !== 'create') { await harness.close(ctx); throw new Error('project identity missing'); }
 await harness.commit((tx) => tx.doc(Project), ctx);
+const files = new ProjectFiles(dirname(resolve(directory)));
 
 async function snapshot() {
   const project = (await harness.snapshot(Project, ctx))!;
   const conversations = await Promise.all(project.conversations.map(async (id) => ({ id: String(id), ...(await harness.snapshot(Chat, id, ctx))! })));
   const inspection = await harness.inspect(ctx);
-  return { id: project.id, name: project.name, conversations, tasks: inspection.tasks, scheduling: inspection.scheduling, modelRequests: 0, runtimePid: process.pid };
+  return { id: project.id, name: project.name, conversations, files: project.files || [], inputVersions: project.inputVersions || [], tasks: inspection.tasks, scheduling: inspection.scheduling, modelRequests: 0, runtimePid: process.pid };
 }
 async function chatId(value: unknown) {
   const project = (await harness.snapshot(Project, ctx))!;
@@ -63,6 +65,35 @@ async function dispatch(request: Record<string, unknown>) {
         doc.revision++;
         return { id: String(id), title: doc.title, draft: doc.draft, revision: doc.revision };
       }, ctx);
+    }
+    case 'file.import': {
+      const imported = await files.import(request.name, request.contentBase64);
+      await harness.commit(async (tx) => { const project = await tx.doc(Project); if (!project.files) project.files = []; project.files.push(imported); }, ctx);
+      return imported;
+    }
+    case 'file.preview': {
+      const project = (await harness.snapshot(Project, ctx))!;
+      const source = project.files?.find((file) => file.id === request.fileId);
+      if (!source) throw new Error('文件不存在');
+      const bytes = await files.read(source.path);
+      let text: string | null;
+      try { text = new TextDecoder('utf-8', { fatal: true }).decode(bytes.subarray(0, 8000), { stream: bytes.length > 8000 }); } catch { text = null; }
+      return { ...source, text, truncated: bytes.length > 8000, currentSize: bytes.length };
+    }
+    case 'input.freeze': {
+      const conversationId = await chatId(request.conversationId);
+      const project = (await harness.snapshot(Project, ctx))!;
+      if (!Array.isArray(request.fileIds) || !request.fileIds.length || request.fileIds.length > 20 || new Set(request.fileIds).size !== request.fileIds.length) throw new Error('请选择 1–20 个不同文件');
+      const selected = request.fileIds.map((id) => { const source = project.files?.find((file) => file.id === id); if (!source) throw new Error('输入文件不存在'); return source; });
+      const version = await files.freeze(String(conversationId), selected, project.inputVersions || []);
+      await harness.commit(async (tx) => { const project = await tx.doc(Project); if (!project.inputVersions) project.inputVersions = []; project.inputVersions.push(version); }, ctx);
+      return files.fixed(version);
+    }
+    case 'input.read': {
+      const project = (await harness.snapshot(Project, ctx))!;
+      const version = project.inputVersions?.find((version) => version.id === request.versionId);
+      if (!version) throw new Error('输入版本不存在');
+      return files.fixed(version);
     }
     case 'close': await harness.close(ctx); return { closed: true };
     default: throw new Error('unsupported operation');

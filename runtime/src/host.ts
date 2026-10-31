@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { dirname, join, resolve } from 'node:path';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import { createLocalAgent } from './agent.ts';
+import { closeModels } from './model-configuration.ts';
 import { closeScience, type ScienceOptions } from './science.ts';
 import { defineDoc, Harness, type ConversationId } from '@earendil-works/pi-durable';
 import { openNodeSqliteStorage } from '@earendil-works/pi-durable/storage/sqlite/node';
@@ -17,7 +18,7 @@ const Project = defineDoc<{ id: string; name: string; conversations: Conversatio
   kind: 'silicolab.project', version: 1, scope: 'session',
   initial: () => ({ id: randomUUID(), name: name || '科研项目', conversations: [] }), checkpointWhen: () => true,
 });
-const Chat = defineDoc<{ title: string; draft: string; revision: number }>({
+const Chat = defineDoc<{ title: string; draft: string; revision: number; modelConfigurationId?: string }>({
   kind: 'silicolab.conversation', version: 1, scope: 'conversation', history: 'latest', fork: 'initial',
   initial: () => ({ title: '新对话', draft: '', revision: 0 }), checkpointWhen: () => true,
 });
@@ -76,7 +77,7 @@ async function dispatch(request: Record<string, unknown>) {
         if (request.revision !== doc.revision) throw new Error('草稿已更新，请重新载入后保存');
         doc.draft = text;
         doc.revision++;
-        return { id: String(id), title: doc.title, draft: doc.draft, revision: doc.revision };
+        return { id: String(id), ...doc };
       }, ctx);
     }
     case 'file.import': {
@@ -108,6 +109,16 @@ async function dispatch(request: Record<string, unknown>) {
       if (!version) throw new Error('输入版本不存在');
       return files.fixed(version);
     }
+    case 'conversation.model': {
+      const id = await chatId(request.conversationId);
+      if (request.configurationId !== null && (typeof request.configurationId !== 'string' || !/^[a-f0-9-]{36}$/.test(request.configurationId))) throw new Error('模型配置身份不合法');
+      return harness.commit(async (tx) => {
+        const chat = await tx.doc(Chat, id);
+        if (request.configurationId === null) delete chat.modelConfigurationId;
+        else chat.modelConfigurationId = request.configurationId as string;
+        return { id: String(id), ...chat };
+      }, ctx);
+    }
     case 'task.start': {
       const conversationId = await chatId(request.conversationId);
       if (typeof request.requestId !== 'string' || !request.requestId || request.requestId.length > 200 || typeof request.goal !== 'string' || !request.goal.trim() || request.goal.length > 100000 || !Array.isArray(request.authorizedTools) || !request.authorizedTools.every((tool) => typeof tool === 'string')) throw new Error('任务目标、身份或授权格式不合法');
@@ -132,6 +143,8 @@ async function dispatch(request: Record<string, unknown>) {
         if (!simulation || typeof simulation.payload !== 'string' || simulation.payload.length > 10000 || !Number.isInteger(simulation.durationMs) || Number(simulation.durationMs) < 0 || Number(simulation.durationMs) > 60000 || typeof simulation.queryable !== 'boolean' || !['normal', 'lost', 'hold_after_accept'].includes(String(simulation.responseMode))) throw new Error('模拟外部作业参数不合法');
         options.simulation = { payload: simulation.payload, durationMs: Number(simulation.durationMs), queryable: simulation.queryable, responseMode: simulation.responseMode as 'normal' | 'lost' | 'hold_after_accept' };
       }
+      const chat = await harness.snapshot(Chat, conversationId, ctx);
+      if (chat?.modelConfigurationId) options.modelConfigurationId = chat.modelConfigurationId;
       return agent.start(conversationId, request.requestId, request.goal, request.authorizedTools, options);
     }
     case 'external.reconcile': return agent.reconcileExternal(String(request.taskId));
@@ -163,4 +176,4 @@ try {
       if (request.op === 'close' || stopAfterResponse) break;
     } catch (error) { console.log(JSON.stringify({ id, error: String(error) })); }
   }
-} finally { await agent.closeExecutions(); await harness.close(ctx); closeScience(); lines.close(); }
+} finally { await agent.closeExecutions(); await harness.close(ctx); closeScience(); closeModels(); lines.close(); }

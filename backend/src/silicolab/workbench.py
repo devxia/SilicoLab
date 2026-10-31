@@ -73,7 +73,7 @@ class DraftInput(BaseModel):
 
 
 class ProjectHost:
-    def __init__(self, path, create, name, simulated):
+    def __init__(self, path, create, name, simulated, model_configuration):
         self.path = Path(path).resolve(strict=True)
         if not self.path.is_dir():
             raise ValueError('请选择存在的项目目录')
@@ -89,6 +89,7 @@ class ProjectHost:
         self._lease = (self.state / 'owner.lock').open('a')
         self._process = None
         self._supervisor = None
+        self._credentials = None
         self._serial = threading.Lock()
         self._next = 0
         try:
@@ -101,6 +102,9 @@ class ProjectHost:
                    'SILICOLAB_PYTHON': sys.executable, 'SILICOLAB_BACKEND': str(Path(__file__).resolve().parent.parent)}
             env['SILICOLAB_SIMULATED_EXECUTOR'] = simulated.url
             env['SILICOLAB_SIMULATED_EXECUTOR_ID'] = simulated.info()['serviceId']
+            from silicolab.model_configuration import ModelCredentialChannel
+            self._credentials = ModelCredentialChannel(model_configuration)
+            env['SILICOLAB_MODEL_FD'] = str(self._credentials.client.fileno())
             science_env = {'PATH': '/usr/bin:/bin', 'LANG': 'en_US.UTF-8'}
             for key in ('SILICOLAB_SCIENCE_REMOTE', 'SILICOLAB_SCIENCE_REMOTE_TIMEOUT'):
                 if os.environ.get(key):
@@ -118,10 +122,11 @@ class ProjectHost:
                                                   'create' if create else 'open', name],
                                                  stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                                                  text=True, bufsize=1, close_fds=True,
-                                                 pass_fds=(self._lease.fileno(), node_channel.fileno()), env=env)
+                                                 pass_fds=(self._lease.fileno(), node_channel.fileno(), self._credentials.client.fileno()), env=env)
             finally:
                 node_channel.close()
                 supervisor_channel.close()
+                self._credentials.detach_client()
             if not self._read().get('ready'):
                 raise ValueError('智能体宿主未就绪')
         except BaseException:
@@ -170,6 +175,8 @@ class ProjectHost:
             except subprocess.TimeoutExpired:
                 self._supervisor.kill()
                 self._supervisor.wait(timeout=5)
+        if self._credentials:
+            self._credentials.close()
         if not self._lease.closed:
             self._lease.close()
 
@@ -219,7 +226,7 @@ class Workbench:
             if fresh:
                 if len(self._hosts) >= 4:
                     raise ValueError('当前最多打开4个项目宿主；请结束并重新打开应用选择项目')
-                host = ProjectHost(canonical, create, name, self.simulated())
+                host = ProjectHost(canonical, create, name, self.simulated(), self.model_configuration)
                 self._hosts[canonical] = host
             try:
                 snapshot = host.call('status')
@@ -344,6 +351,29 @@ def router(workbench):
     @routes.get('/simulated-executor')
     def simulated_executor_status():
         return workbench.simulated().info()
+
+    @routes.get('/model-configs')
+    def model_configs():
+        return invoke(workbench.model_configuration.list)
+
+    @routes.post('/model-configs', status_code=201)
+    def save_model_config(values: dict):
+        return invoke(workbench.model_configuration.save, values)
+
+    @routes.post('/model-configs/{configuration_id}/verify')
+    def verify_model_config(configuration_id: str):
+        return invoke(workbench.model_configuration.verify, configuration_id)
+
+    @routes.delete('/model-configs/{configuration_id}')
+    def delete_model_config(configuration_id: str):
+        return invoke(workbench.model_configuration.delete, configuration_id)
+
+    @routes.put('/projects/{project_id}/conversations/{conversation_id}/model')
+    def select_model(project_id: str, conversation_id: str, values: dict):
+        identity = values.get('configurationId')
+        if identity is not None and identity not in [item['id'] for item in workbench.model_configuration.list()]:
+            raise HTTPException(409, '模型未配置，未切换接收方')
+        return invoke(workbench.call, project_id, 'conversation.model', conversationId=conversation_id, configurationId=identity)
 
     @routes.post('/projects/{project_id}/tasks/{task_id}/reconcile')
     def reconcile_science(project_id: str, task_id: str):

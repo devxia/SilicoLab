@@ -137,6 +137,19 @@ worker 的网络拒绝钩子只针对可信科学入口，不能代替不可信 
 
 专用夹具验证实际上传、产物、unknown和明确重试；普通工作台夹具把新科学传输指向回环拒绝端口，避免误触真实服务。`outputs/ui/remote-science/` 不提交。真实科学服务调用不在本次自动化授权中。
 
+## 模型配置与安全凭据
+
+[#14 模型配置契约](model-configuration.md) 提供应用级设置、明确 Responses/Messages 协议与自定义端点、SilicoLab 独立 Keychain 命名空间，以及对话模型选择。默认不联网、未检查端点标未验证，key不进入项目或提示词；不导入其他软件认证。
+
+```bash
+.venv/bin/python -B -m unittest discover -s backend/tests -p test_model_configuration.py -v
+# 专用8767双协议人工端点夹具
+.venv/bin/python -B tests/e2e/fixtures/model_workbench_fixture.py
+.venv/bin/python -B tests/e2e/browser_workbench_models.py
+```
+
+自动化仅使用人工key、临时注入库和回环服务；另有macOS Keychain随机人工条目的增删读写验证。不能据此宣称真实provider或完整分发已验收。
+
 ## 常规检查
 
 ```bash

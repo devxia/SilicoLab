@@ -48,6 +48,10 @@ node_modules/
 *.sqlite3-journal
 
 # Local environment configuration; sanitized examples may be committed
+# Application model metadata (keys belong only in Keychain)
+model-configs.json
+model-configs-*.tmp
+
 .env
 .env.*
 !.env.example

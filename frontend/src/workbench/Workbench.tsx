@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Dna, FolderOpen, FolderPlus, MessageSquare, PanelLeft, Plus, Files, ListChecks, FileOutput, X, ArrowUp, ChevronRight, Check, LoaderCircle } from 'lucide-react';
+import { Dna, FolderOpen, FolderPlus, MessageSquare, PanelLeft, Plus, Files, ListChecks, FileOutput, X, ArrowUp, ChevronRight, Check, LoaderCircle, Settings } from 'lucide-react';
 import CodonWorkbench from '../app/App';
 import { nativeAPI } from '../platform/native';
 import { request, type Conversation, type Project, type ProjectIndex } from './client';
@@ -11,10 +11,13 @@ import LocalScienceForm from './LocalScienceForm';
 import './science.css';
 import ScientificResults from './ScientificResults';
 import SimulatedJobForm from './SimulatedJobForm';
+import ModelSettings, { type ModelConfiguration } from './ModelSettings';
 
 type WorkspaceTab = '文件' | '任务' | '结果';
 export default function Workbench() {
   const [projects, setProjects] = useState<ProjectIndex[]>([]);
+  const [settings, setSettings] = useState(false);
+  const [modelConfigurations, setModelConfigurations] = useState<ModelConfiguration[]>([]);
   const [project, setProject] = useState<Project | null>(null);
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
@@ -33,9 +36,10 @@ export default function Workbench() {
   const returnFocus = useRef<HTMLElement | null>(null);
   const chat = project?.conversations.find((item) => item.id === conversationId);
   const conversation = useConversation(project?.id, conversationId);
+  const selectedModelMissing = Boolean(chat?.modelConfigurationId && !modelConfigurations.some((item) => item.id === chat.modelConfigurationId));
   const sendIdentity = useRef<{ goal: string; id: string } | null>(null);
 
-  useEffect(() => { request<ProjectIndex[]>('/projects').then(setProjects).catch((e) => setError(e.message)); }, []);
+  useEffect(() => { request<ProjectIndex[]>('/projects').then(setProjects).catch((e) => setError(e.message)); request<ModelConfiguration[]>('/model-configs').then(setModelConfigurations).catch(() => {}); }, []);
   useEffect(() => {
     const update = () => setManual(window.location.hash === '#manual');
     window.addEventListener('hashchange', update); return () => window.removeEventListener('hashchange', update);
@@ -65,6 +69,11 @@ export default function Workbench() {
     if (sendIdentity.current?.goal !== `${project.id}/${chat.id}/${draft}`) sendIdentity.current = { goal: `${project.id}/${chat.id}/${draft}`, id: crypto.randomUUID() };
     await request<ResearchTask>(`/projects/${project.id}/tasks`, 'POST', { conversationId: chat.id, requestId: sendIdentity.current.id, goal: draft, authorizedTools: ['synthetic_count'] });
     sendIdentity.current = null;
+  }
+  async function selectModel(configurationId: string) {
+    if (!project || !chat) return;
+    const selected = await request<Conversation>(`/projects/${project.id}/conversations/${chat.id}/model`, 'PUT', { configurationId: configurationId || null });
+    setProject((current) => current ? { ...current, conversations: current.conversations.map((item) => item.id === selected.id ? selected : item) } : current);
   }
   function selectChat(item?: Conversation) { setConversationId(item?.id || null); setDraft(item?.draft || ''); setRevision(item?.revision || 0); setSaved(true); }
   async function openProject(item: ProjectIndex) {
@@ -110,18 +119,19 @@ export default function Workbench() {
       </nav>
       <button className="wb-open" aria-label="打开项目目录" onClick={() => modal('open')}><Plus size={16} />{expanded && '打开项目目录'}</button>
       <div className="wb-functions">{expanded && <small>科研功能</small>}<a href="#manual" aria-label="ProteinFactory D2P 专项工作台"><Dna size={18} />{expanded && <span>ProteinFactory<small>D2P 专项工作台</small></span>} {expanded && <ChevronRight size={14} />}</a></div>
+      <button className="wb-open" aria-label="模型设置" onClick={() => setSettings(!settings)}><Settings size={17} />{expanded && '模型设置'}</button>
       <footer>{expanded ? <><span>本地工作空间</span><small>项目记录保存在所选目录</small></> : <span aria-label="本地工作空间">●</span>}</footer>
     </aside>
     <main className="wb-main">
       <header className="wb-header"><div><FolderOpen size={16} /><span>{project?.name || '选择一个科研项目'}</span><span className="wb-header-chat">/　{chat?.title || '对话'}</span></div><div>{(['文件', '任务', '结果'] as WorkspaceTab[]).map((item, index) => <button key={item} aria-label={`查看${item}`} aria-pressed={tab === item} onClick={() => analysis(item)}>{index === 0 ? <Files size={18} /> : index === 1 ? <ListChecks size={18} /> : <FileOutput size={18} />}</button>)}</div></header>
       {error && <div role="alert" className="wb-error">{error}<button aria-label="关闭错误提示" onClick={() => setError('')}><X size={15} /></button></div>}
-      <div className="wb-chat">
+      {settings ? <ModelSettings onChange={setModelConfigurations} /> : <div className="wb-chat">
         {conversation.problem && <p role="alert" className="wb-error">{conversation.problem}</p>}
         {conversation.state && (conversation.state.entries.length > 0 || conversation.state.tasks.length > 0) ? <ConversationHistory state={conversation.state} projectId={project!.id} /> : <div className="wb-welcome"><Dna size={28} /><h1>{chat ? chat.title : '从一个科研问题开始'}</h1><p>{project ? chat ? '写下目标与需要保留的要求，草稿随对话保存。' : '为这个项目建立对话，组织研究思路。' : '选择本地目录，让对话、任务与结果归属于同一个项目。'}</p>{!project && <div className="wb-welcome-actions"><button className="button primary" onClick={() => modal('create')}>创建项目</button><button className="button outline" onClick={() => modal('open')}>打开项目目录</button></div>}{project && !chat && <button className="button primary" onClick={() => modal('conversation')}>新建对话</button>}</div>}
-        <div className="wb-composer"><label className="visually-hidden" htmlFor="research-draft">研究目标草稿</label><textarea id="research-draft" placeholder="描述你的科研目标…" disabled={!chat || busy} value={draft} onChange={(event) => { setDraft(event.target.value); setSaved(false); }} /><div><span>{saved ? <Check size={14} /> : null}{saved ? '草稿已保存' : '有未保存修改'}</span><button className="button primary" disabled={!chat || busy || saved} onClick={() => perform(saveDraft)}>{busy ? <LoaderCircle size={16} /> : <ArrowUp size={16} />}保存草稿</button><button className="button outline" disabled={!chat || busy} onClick={() => analysis('任务')}>D2P 专项本地实验</button><button className="button primary" disabled={!chat || busy || !draft.trim()} onClick={() => perform(runValidation)}>运行本机验证</button></div></div>
-        <p className="wb-model-note">本机验证模型 · 默认只调用文本计数；D2P 本地专项需在任务区明确选择，不自动调用科学远端。{chat && !conversation.connected ? ' 正在连接状态流…' : ''}</p>
+        <div className="wb-model-select"><label>当前对话模型<select aria-label="当前对话模型" disabled={!chat || busy} value={chat?.modelConfigurationId || ''} onChange={(event) => perform(() => selectModel(event.target.value))}><option value="">本机验证模型（不联网）</option>{selectedModelMissing && <option value={chat?.modelConfigurationId}>已移除或不可用的所选模型（未切换）</option>}{modelConfigurations.map((item) => <option key={item.id} value={item.id}>{item.name} · {item.protocol} · {item.verification === 'unverified' ? '未验证' : '已检查连接'}</option>)}</select></label></div><div className="wb-composer">{selectedModelMissing && <p role="alert">当前对话所选模型已移除或不可用。请明确选择其他模型，不会自动回退。</p>}<label className="visually-hidden" htmlFor="research-draft">研究目标草稿</label><textarea id="research-draft" placeholder="描述你的科研目标…" disabled={!chat || busy} value={draft} onChange={(event) => { setDraft(event.target.value); setSaved(false); }} /><div><span>{saved ? <Check size={14} /> : null}{saved ? '草稿已保存' : '有未保存修改'}</span><button className="button primary" disabled={!chat || busy || saved} onClick={() => perform(saveDraft)}>{busy ? <LoaderCircle size={16} /> : <ArrowUp size={16} />}保存草稿</button><button className="button outline" disabled={!chat || busy} onClick={() => analysis('任务')}>D2P 专项本地实验</button><button className="button primary" disabled={!chat || busy || !draft.trim() || selectedModelMissing} onClick={() => perform(runValidation)}>{chat?.modelConfigurationId ? '发送到所选模型' : '运行本机验证'}</button></div></div>
+        <p className="wb-model-note">{chat?.modelConfigurationId ? '所选模型会接收本对话目标与已授权工具摘要；模型许可不授权科学服务上传。' : '本机验证模型 · 默认只调用文本计数；D2P 本地专项需在任务区明确选择，不自动调用科学远端。'}{chat && !conversation.connected ? ' 正在连接状态流…' : ''}</p>
         <p className="wb-caption">{project?.path || '项目内容保存在你选择的本地目录'}</p>
-      </div>
+      </div>}
     </main>
     {tab && <aside className="wb-analysis" aria-label="分析工作区"><div className="wb-tabs" role="tablist" aria-label="分析区标签">{(['文件', '任务', '结果'] as WorkspaceTab[]).map((item) => <button role="tab" aria-selected={tab === item} key={item} onClick={() => analysis(item)}>{item}</button>)}<button aria-label="关闭分析区" onClick={closeAnalysis}><X size={17} /></button></div><section role="tabpanel"><small>{project?.name || '未选择项目'}</small><h2>{tab === '文件' ? '项目文件' : tab === '任务' ? '科研任务' : '科研产物'}</h2><p>{tab === '文件' ? '项目目录和对话记录已保存，选择文件导入后可在这里检视。' : tab === '任务' ? conversation.state?.tasks.length ? '下方记录来自实际内核与工具执行。模型答复不等于科研完成。' : '当前没有科研任务。保存对话草稿不会触发模型或计算。' : conversation.state?.tasks.some((task) => task.toolExecutions.some((execution) => execution.result?.records)) ? '结果来自已记录的科学执行，校验、输入和产物可逐项核对。' : '当前没有科研产物。完成实际计算与校验后，结果将在这里显示。'}</p>{tab === '结果' && project && <ScientificResults key={`${project.id}/${conversationId}`} projectId={project.id} tasks={conversation.state?.tasks || []} />}{tab === '任务' && project && chat && <SimulatedJobForm key={`sim-${project.id}/${chat.id}`} projectId={project.id} conversationId={chat.id} />}{tab === '任务' && project && chat && <><LocalScienceForm key={`remote-${project.id}/${chat.id}`} source="remote" project={project} conversationId={chat.id} /><LocalScienceForm key={`${project.id}/${chat.id}`} project={project} conversationId={chat.id} /></>}{tab === '任务' && conversation.state?.tasks.map((task) => <TaskCard key={task.id} task={task} scheduling={conversation.state!.scheduling} projectId={project!.id} />)}{tab === '文件' && project && <ProjectFiles key={project.id} project={project} conversationId={conversationId} onChange={(updated) => setProject((current) => current?.id === updated.id ? updated : current)} />}{project && <dl><dt>项目目录</dt><dd>{project.path}</dd><dt>对话</dt><dd>{project.conversations.length}</dd></dl>}</section></aside>}
     {dialog && <div className="wb-modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) setDialog(null); }}><form ref={form} role="dialog" aria-modal="true" aria-label={dialog === 'conversation' ? '建立新对话' : dialog === 'create' ? '建立科研项目' : '打开已有项目'} className="wb-modal" onSubmit={(e) => { e.preventDefault(); perform(acceptDialog); }} onKeyDown={(event) => {

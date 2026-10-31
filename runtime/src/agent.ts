@@ -9,6 +9,7 @@ import { ProjectFiles } from './inputs.ts';
 import { runScience, ScienceFailure, type ScienceOptions, type ScienceResult } from './science.ts';
 import { scienceRetryDecision, retryExternalDecision, stopDecision, toolDecision, type TaskDecision } from './decisions.ts';
 import { ExecutionOwner, ExecutionStores } from './executions.ts';
+import { configuredProvider, resolveModel } from './model-configuration.ts';
 import { SimulatedJobClient, type ExternalJob, type ExternalReceipt } from './external.ts';
 
 const ctx = BACKGROUND_CONTEXT;
@@ -26,7 +27,7 @@ export function createLocalAgent(directory: string, getInputs: (id: string, conv
   let harness: Harness;
   const files = new ProjectFiles(directory);
   const external = new SimulatedJobClient();
-  const models = createModels();
+  const models = createModels({ authContext: { env: async () => undefined, fileExists: async () => false } });
   const registry = createRegistry();
   let activeKernel: Harness | undefined;
   let activeTaskId: string | undefined;
@@ -411,7 +412,14 @@ export function createLocalAgent(directory: string, getInputs: (id: string, conv
     // Queue time can be unbounded: recheck completed evidence at the actual admission boundary.
     for (const execution of task.toolExecutions) if (execution.status === 'completed') await verifyCompleted(execution, '完成产物已改变，准入前需核对');
     const conversation = (await kernel.conversation(conversationId, ctx))!;
-    await conversation.configure({ model: { provider: 'faux', modelId: 'faux-1' }, tools: scientific ? [localTool] : [countTool] }, ctx);
+    let selectedModel = { provider: 'faux', modelId: 'faux-1' };
+    if (task.modelConfigurationId) {
+      const configuration = await resolveModel(task.modelConfigurationId);
+      const provider = configuredProvider(configuration);
+      models.setProvider(provider);
+      selectedModel = { provider: provider.id, modelId: configuration.modelId };
+    }
+    await conversation.configure({ model: selectedModel, tools: scientific ? [localTool] : [countTool] }, ctx);
     const submission = existing ? (await kernel.submission(existing.id, ctx))!
       : await conversation.submit({ type: 'input', requestId: task.requestId, content: task.goal, whenBusy: 'reject' }, ctx);
     await harness.commit(async (tx) => {

@@ -1,0 +1,15 @@
+.wb-model-settings { max-width: 700px; margin: 24px auto; padding: 24px; }
+.wb-model-settings h2 { font-size: 22px; margin: 0 0 16px; }
+.wb-model-settings p { color: #666; font-size: 13px; line-height: 1.75; }
+.wb-model-settings ul { padding: 0; list-style: none; }
+.wb-model-settings li { display: grid; gap: 7px; padding: 16px 0; border-bottom: 1px solid #e1e1e1; }
+.wb-model-settings li span, .wb-model-settings small { font-size: 12px; color: #666; }
+.wb-model-settings code { overflow-wrap: anywhere; font-size: 12px; }
+.wb-model-settings li div { display: flex; flex-wrap: wrap; gap: 12px; }
+.wb-model-settings li button { border: 1px solid #ddd; border-radius: 6px; padding: 8px 12px; background: #fff; }
+.wb-model-settings form { display: grid; gap: 16px; padding-top: 18px; }
+.wb-model-settings label { display: grid; gap: 8px; font-size: 13px; }
+.wb-model-settings input, .wb-model-settings select, .wb-model-select select { border: 1px solid #ddd; border-radius: 7px; background: #fafafa; min-width: 0; padding: 10px 12px; font: inherit; }
+.wb-model-select { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 10px; font-size: 12px; color: #666; }
+.wb-model-settings button:focus-visible, .wb-model-settings input:focus-visible, .wb-model-settings select:focus-visible, .wb-model-select select:focus-visible { outline: 2px solid #222; outline-offset: 2px; }
+@media (max-width: 700px) { .wb-model-settings { margin: 0; padding: 16px; } }

@@ -8,7 +8,7 @@ export type ScienceResult = { status: string; inputVersionId: string; engine_inf
 export type ToolExecution = { id: string; toolTaskId: number; callId: string; tool: string; input: string; status: string; progress: number; error?: string; result?: { characters?: number } & Partial<ScienceResult>; artifact?: Artifact; artifacts?: Artifact[] };
 export type ResearchTask = { id: string; conversationId: string; requestId: string; goal: string; status: string; workflow?: string; submissionId?: number; toolExecutions: ToolExecution[]; decisions?: TaskDecision[]; pauseReason?: string; externalJob?: ExternalJob };
 type Block = { type: string; text?: string; name?: string };
-type Message = { role: string; content: string | Block[] };
+type Message = { role: string; provider?: string; model?: string; content: string | Block[] };
 export type ConversationState = { conversationId: string; entries: { id: number | string; kind: string; model?: Message[] }[]; partial: Block[]; tasks: ResearchTask[]; scheduling: string; modelRequests: number };
 export function useConversation(projectId?: string, conversationId?: string | null) {
   const [snapshot, setSnapshot] = useState<{ projectId: string; data: ConversationState } | null>(null);
@@ -30,8 +30,8 @@ export function useConversation(projectId?: string, conversationId?: string | nu
 function text(content: string | Block[]) { return typeof content === 'string' ? content : content.filter((block) => block.type === 'text').map((block) => block.text || '').join(''); }
 export function ConversationHistory({ state, projectId }: { state: ConversationState; projectId: string }) {
   return <div className="wb-transcript" aria-label="对话记录">
-    {state.entries.map((entry) => <div key={entry.id}>{entry.model?.filter((message) => message.role !== 'system' && text(message.content)).map((message, index) => <article key={index} className={`wb-message wb-message-${message.role}`}><small>{message.role === 'user' ? '你' : message.role === 'toolResult' ? '工具结果' : 'SilicoLab · 本机验证模型'}</small><p>{text(message.content)}</p></article>)}</div>)}
-    {state.partial.length > 0 && <article className="wb-message wb-partial"><small>本机验证模型 · 正在响应</small><p>{text(state.partial)}</p></article>}
+    {state.entries.map((entry) => <div key={entry.id}>{entry.model?.filter((message) => message.role !== 'system' && text(message.content)).map((message, index) => <article key={index} className={`wb-message wb-message-${message.role}`}><small>{message.role === 'user' ? '你' : message.role === 'toolResult' ? '工具结果' : message.provider && message.provider !== 'faux' ? `SilicoLab · ${message.model || '所选模型'}` : 'SilicoLab · 本机验证模型'}</small><p>{text(message.content)}</p></article>)}</div>)}
+    {state.partial.length > 0 && <article className="wb-message wb-partial"><small>模型正在响应</small><p>{text(state.partial)}</p></article>}
     {state.tasks.map((task) => <TaskCard key={task.id} task={task} scheduling={state.scheduling} projectId={projectId} />)}
   </div>;
 }

@@ -1,4 +1,4 @@
-export type Conversation = { id: string; title: string; draft: string; revision: number };
+export type Conversation = { id: string; title: string; draft: string; revision: number; modelConfigurationId?: string };
 export type ProjectIndex = { id: string; name: string; path: string };
 export type ImportedFile = { id: string; name: string; path: string; size: number; sha256: string; importedAt: string };
 export type FixedInput = { fileId: string; name: string; source: string; path: string; size: number; sha256: string; version: number; contentBase64?: string };

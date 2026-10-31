@@ -344,12 +344,15 @@ class Worker:
         self.store.mutate(job_id, finish_job)
 
 
-def create_app(db_path=None, optimizer=None, delay=0.5):
+def create_app(db_path=None, optimizer=None, delay=0.5, credential_store=None):
     database = db_path or browser_database()
     store = Store(database)
     worker = Worker(store, optimizer or default_optimizer, delay)
     from silicolab.workbench import Workbench, router as workbench_router
+    from silicolab.model_configuration import ModelConfiguration
+    model_configuration = ModelConfiguration(Path(database).with_name('model-configs.json'), credential_store)
     workbench = Workbench(Path(database).with_name('projects.json'))
+    workbench.model_configuration = model_configuration
 
     @asynccontextmanager
     async def lifespan(app):

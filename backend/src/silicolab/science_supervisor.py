@@ -28,14 +28,21 @@ def main(channel_fd=None):
             with jobs_lock:
                 if closing.is_set() or jobs[identity]['cancelled']:
                     raise ValueError('科学任务在启动前已停止')
+                remote = request.get('workflow') == 'protein_factory_remote'
+                module = 'remote_science_worker' if remote else 'science_worker'
+                env = {'PATH': '/usr/bin:/bin', 'LANG': 'en_US.UTF-8'}
+                if remote:
+                    for key in ('SILICOLAB_SCIENCE_REMOTE', 'SILICOLAB_SCIENCE_REMOTE_TIMEOUT'):
+                        if os.environ.get(key):
+                            env[key] = os.environ[key]
                 process = subprocess.Popen([sys.executable, '-I', '-B', '-c',
-                                            'import sys;sys.path.insert(0,sys.argv[1]);from silicolab.science_worker import main;main()',
+                                            f'import sys;sys.path.insert(0,sys.argv[1]);from silicolab.{module} import main;main()',
                                             str(Path(__file__).resolve().parent.parent)],
                                            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                           close_fds=True, env={'PATH': '/usr/bin:/bin', 'LANG': 'en_US.UTF-8'})
+                                           close_fds=True, env=env)
                 jobs[identity]['process'] = process
             send({'id': identity, 'event': 'started', 'pid': process.pid})
-            stdout, stderr = process.communicate(json.dumps(request).encode(), timeout=60)
+            stdout, stderr = process.communicate(json.dumps(request).encode(), timeout=300 if remote else 60)
             if len(stdout) > 16 * 1024 * 1024:
                 raise ValueError('科学输出超过协议上限')
             if process.returncode:

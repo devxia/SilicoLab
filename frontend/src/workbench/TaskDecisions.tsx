@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { request } from './client';
 import './decisions.css';
 
-export type TaskDecision = { id: string; kind: 'terminal_stop' | 'tool_authorization' | 'external_retry'; question: string; options: { value: string; label: string }[]; status: 'pending' | 'answered'; answer?: string; answeredAt?: string };
+export type TaskDecision = { id: string; kind: 'terminal_stop' | 'tool_authorization' | 'external_retry' | 'science_retry'; question: string; options: { value: string; label: string }[]; status: 'pending' | 'answered'; answer?: string; answeredAt?: string; uncertainty?: { attempt: string; inputVersionId: string; transportTimeout: boolean; queryAvailable: boolean } };
 export default function TaskDecisions({ projectId, taskId, taskStatus, decisions }: { projectId: string; taskId: string; taskStatus: string; decisions: TaskDecision[] }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');

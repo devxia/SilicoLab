@@ -111,12 +111,19 @@ async function dispatch(request: Record<string, unknown>) {
     case 'task.start': {
       const conversationId = await chatId(request.conversationId);
       if (typeof request.requestId !== 'string' || !request.requestId || request.requestId.length > 200 || typeof request.goal !== 'string' || !request.goal.trim() || request.goal.length > 100000 || !Array.isArray(request.authorizedTools) || !request.authorizedTools.every((tool) => typeof tool === 'string')) throw new Error('任务目标、身份或授权格式不合法');
-      const options: ScienceOptions = { workflow: request.workflow === 'd2p_local' ? 'd2p_local' : request.workflow === 'simulated_external' ? 'simulated_external' : 'validation' };
-      if (request.workflow && !['validation', 'd2p_local', 'simulated_external'].includes(String(request.workflow))) throw new Error('未知任务模式');
+      const options: ScienceOptions = { workflow: request.workflow === 'd2p_local' ? 'd2p_local' : request.workflow === 'simulated_external' ? 'simulated_external' : request.workflow === 'protein_factory_remote' ? 'protein_factory_remote' : 'validation' };
+      if (request.workflow && !['validation', 'd2p_local', 'simulated_external', 'protein_factory_remote'].includes(String(request.workflow))) throw new Error('未知任务模式');
       if (request.workflow === 'd2p_local') {
         const parameters = request.parameters as Record<string, unknown> | undefined;
         if (!parameters || !['preserve', 'add', 'ask'].includes(String(parameters.stopPolicy)) || typeof parameters.avoid !== 'string' || parameters.avoid.length > 2000 || typeof request.inputVersionId !== 'string') throw new Error('本地专项参数不完整');
         options.parameters = { stopPolicy: parameters.stopPolicy as 'preserve' | 'add' | 'ask', avoid: parameters.avoid };
+        options.inputVersionId = request.inputVersionId;
+        options.specialtyAcknowledged = request.specialtyAcknowledged === true;
+      }
+      if (request.workflow === 'protein_factory_remote') {
+        const parameters = request.parameters as Record<string, unknown> | undefined;
+        if (!parameters || !['preserve', 'add'].includes(String(parameters.stopPolicy)) || typeof parameters.avoid !== 'string' || parameters.avoid.length > 2000 || typeof request.inputVersionId !== 'string') throw new Error('远端专项参数不完整');
+        options.parameters = { stopPolicy: parameters.stopPolicy as 'preserve' | 'add', avoid: parameters.avoid };
         options.inputVersionId = request.inputVersionId;
         options.specialtyAcknowledged = request.specialtyAcknowledged === true;
       }
@@ -129,6 +136,7 @@ async function dispatch(request: Record<string, unknown>) {
     }
     case 'external.reconcile': return agent.reconcileExternal(String(request.taskId));
     case 'external.cancel': return agent.cancelExternal(String(request.taskId));
+    case 'science.reconcile': return agent.reconcileScience(String(request.taskId));
     case 'task.answer': return agent.answer(String(request.taskId), String(request.decisionId), String(request.answer));
     case 'task.continue': return agent.continueTask(String(request.taskId));
     case 'task.pause': {

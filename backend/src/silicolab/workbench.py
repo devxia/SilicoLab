@@ -46,7 +46,7 @@ class TaskInput(BaseModel):
     requestId: str = Field(min_length=1, max_length=200)
     goal: str = Field(min_length=1, max_length=100000)
     authorizedTools: list[str] = Field(default_factory=list, max_length=20)
-    workflow: Literal['validation', 'd2p_local', 'simulated_external'] = 'validation'
+    workflow: Literal['validation', 'd2p_local', 'simulated_external', 'protein_factory_remote'] = 'validation'
     simulation: SimulationInput | None = None
     specialtyAcknowledged: bool = False
     inputVersionId: str | None = Field(default=None, max_length=100)
@@ -101,13 +101,17 @@ class ProjectHost:
                    'SILICOLAB_PYTHON': sys.executable, 'SILICOLAB_BACKEND': str(Path(__file__).resolve().parent.parent)}
             env['SILICOLAB_SIMULATED_EXECUTOR'] = simulated.url
             env['SILICOLAB_SIMULATED_EXECUTOR_ID'] = simulated.info()['serviceId']
+            science_env = {'PATH': '/usr/bin:/bin', 'LANG': 'en_US.UTF-8'}
+            for key in ('SILICOLAB_SCIENCE_REMOTE', 'SILICOLAB_SCIENCE_REMOTE_TIMEOUT'):
+                if os.environ.get(key):
+                    science_env[key] = os.environ[key]
             node_channel, supervisor_channel = socket.socketpair()
             try:
                 self._supervisor = subprocess.Popen([sys.executable, '-I', '-B', '-c',
                                                      'import sys;sys.path.insert(0,sys.argv[1]);from silicolab.science_supervisor import main;main(int(sys.argv[2]))',
                                                      str(Path(__file__).resolve().parent.parent), str(supervisor_channel.fileno())],
                                                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                                    env={'PATH': '/usr/bin:/bin', 'LANG': 'en_US.UTF-8'}, close_fds=True,
+                                                    env=science_env, close_fds=True,
                                                     pass_fds=(supervisor_channel.fileno(),))
                 env['SILICOLAB_SCIENCE_FD'] = str(node_channel.fileno())
                 self._process = subprocess.Popen([node, str(runtime / 'src/host.ts'), str(self.state),
@@ -340,6 +344,10 @@ def router(workbench):
     @routes.get('/simulated-executor')
     def simulated_executor_status():
         return workbench.simulated().info()
+
+    @routes.post('/projects/{project_id}/tasks/{task_id}/reconcile')
+    def reconcile_science(project_id: str, task_id: str):
+        return invoke(workbench.call, project_id, 'science.reconcile', taskId=task_id)
 
     @routes.post('/projects/{project_id}/tasks/{task_id}/external/reconcile')
     def reconcile_external(project_id: str, task_id: str):

@@ -2,10 +2,11 @@ import { randomUUID } from 'node:crypto';
 
 export type TaskDecision = {
   id: string;
-  kind: 'terminal_stop' | 'tool_authorization' | 'external_retry';
+  kind: 'terminal_stop' | 'tool_authorization' | 'external_retry' | 'science_retry';
   question: string;
   options: { value: string; label: string }[];
   status: 'pending' | 'answered';
+  uncertainty?: { attempt: string; inputVersionId: string; transportTimeout: boolean; queryAvailable: boolean };
   answer?: string;
   answeredAt?: string;
 };
@@ -17,6 +18,10 @@ export function stopDecision(names: string[]): TaskDecision {
 export function retryExternalDecision(): TaskDecision {
   return { id: randomUUID(), kind: 'external_retry', question: '独立作业可能已接受，但无法查询核对。仅在此模拟服务内是否按同一稳定请求身份重试回执？',
     options: [{ value: 'retry_same_identity', label: '明确按同一身份重试模拟回执' }, { value: 'keep_unknown', label: '保留结果未知，不重提' }], status: 'pending' };
+}
+export function scienceRetryDecision(info: { attempt: string; inputVersionId: string; transportTimeout: boolean; queryAvailable: boolean }): TaskDecision {
+  return { id: randomUUID(), kind: 'science_retry', question: '远端请求可能已执行但结果未知。已核对本机记录；此服务没有已验证的查询接口。是否按同一固定输入重试未完成项？本机尝试身份不保证服务端幂等，可能重复计算。',
+    options: [{ value: 'retry_remote', label: '明确重试远端请求（可能重复计算）' }, { value: 'keep_unknown', label: '保留未知，不自动重试' }], status: 'pending', uncertainty: info };
 }
 export function toolDecision(tool: string): TaskDecision {
   return { id: randomUUID(), kind: 'tool_authorization', question: `当前任务未授权 ${tool}。是否仅允许本任务使用该工具？`,

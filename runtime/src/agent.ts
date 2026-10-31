@@ -6,8 +6,8 @@ import { createModels } from '@earendil-works/pi-ai/models';
 import { fauxAssistantMessage, fauxProvider, fauxToolCall } from '@earendil-works/pi-ai/providers/faux';
 import { createRegistry, defineDoc, defineExtension, defineTool, LiveDoc, type ConversationId, type Harness, type SubmissionId, type ToolExecutionApi } from '@earendil-works/pi-durable';
 import { ProjectFiles } from './inputs.ts';
-import { runScience, type ScienceOptions, type ScienceResult } from './science.ts';
-import { retryExternalDecision, stopDecision, toolDecision, type TaskDecision } from './decisions.ts';
+import { runScience, ScienceFailure, type ScienceOptions, type ScienceResult } from './science.ts';
+import { scienceRetryDecision, retryExternalDecision, stopDecision, toolDecision, type TaskDecision } from './decisions.ts';
 import { ExecutionOwner, ExecutionStores } from './executions.ts';
 import { SimulatedJobClient, type ExternalJob, type ExternalReceipt } from './external.ts';
 
@@ -15,7 +15,7 @@ const ctx = BACKGROUND_CONTEXT;
 type Artifact = { path: string; sha256: string; size: number; name?: string; mediaType?: string };
 type ExecutionResult = { characters: number; jobId?: string; payloadHash?: string; requestKey?: string; payload?: string; kind?: string } | ScienceResult;
 type Execution = { id: string; toolTaskId: number; callId: string; tool: string; input: string; progress: number; status: string; error?: string; pythonPid?: number; artifact?: Artifact; artifacts?: Artifact[]; result?: ExecutionResult };
-export type ResearchTask = ScienceOptions & { id: string; conversationId: string; requestId: string; goal: string; status: string; authorizedTools: string[]; createdAt: string; submissionId?: SubmissionId; toolExecutions: Execution[]; error?: string; pauseReason?: string; externalJob?: ExternalJob; isolatedExecution?: boolean; queuedAt?: string; startedAt?: string; finishedAt?: string; decisions?: TaskDecision[]; admission?: { authorizedTools: string[]; options: ScienceOptions }; preflight?: { missingStopNames: string[]; inputVersionId: string } };
+export type ResearchTask = ScienceOptions & { id: string; conversationId: string; requestId: string; goal: string; status: string; authorizedTools: string[]; createdAt: string; submissionId?: SubmissionId; toolExecutions: Execution[]; error?: string; pauseReason?: string; externalJob?: ExternalJob; retryRemoteApproved?: string; remoteAttempts?: { id: string; status: string; reason?: string; createdAt: string; reconciledAt?: string; queryAvailable?: boolean }[]; isolatedExecution?: boolean; queuedAt?: string; startedAt?: string; finishedAt?: string; decisions?: TaskDecision[]; admission?: { authorizedTools: string[]; options: ScienceOptions }; preflight?: { missingStopNames: string[]; inputVersionId: string } };
 const Ledger = defineDoc<{ tasks: ResearchTask[]; modelRequests: number; queue?: string[] }>({
   kind: 'silicolab.tasks', version: 1, scope: 'session', initial: () => ({ tasks: [], modelRequests: 0 }), checkpointWhen: () => true,
 });
@@ -32,6 +32,7 @@ export function createLocalAgent(directory: string, getInputs: (id: string, conv
   let activeTaskId: string | undefined;
   let pumping: Promise<void> | undefined;
   let stopping = false;
+  const remoteRuns = new Map<string, { controller: AbortController; done: Promise<void> }>();
   const executions = new ExecutionStores(directory, () => ({ models, registry,
     settings: { compaction: { enabled: false }, retry: { maxRetries: 0 }, restartLimit: 3, progress: { partialIntervalMs: 30, outputIntervalMs: 30 } } }));
   const faux = fauxProvider({ tokensPerSecond: 30 });
@@ -53,7 +54,7 @@ export function createLocalAgent(directory: string, getInputs: (id: string, conv
     const active = (await (activeKernel || harness).inspect(ctx)).submissions.filter((submission) => submission.type === 'input' && submission.status === 'placed');
     if (active.length !== 1) throw new Error('本机验证模型无法确定唯一已准入任务');
     const task = await taskForSubmission(active[0].conversationId, active[0].id);
-    const tool = task.workflow === 'd2p_local' ? 'd2p_local' : 'synthetic_count';
+    const tool = task.workflow === 'protein_factory_remote' ? 'protein_factory_remote' : task.workflow === 'd2p_local' ? 'd2p_local' : 'synthetic_count';
     return fauxAssistantMessage([fauxToolCall(tool, tool === 'synthetic_count' ? { text } : {}, { id: randomUUID() })], { stopReason: 'toolUse' });
   };
   faux.setResponses([response]);
@@ -172,12 +173,12 @@ export function createLocalAgent(directory: string, getInputs: (id: string, conv
     }
     if (stopping) throw new Error('项目正在关闭');
     if ((await tasks()).filter((task) => ['running', 'queued', 'needs_decision', 'admission_pending', 'paused', 'waiting_external', 'result_unknown', 'external_submitting'].includes(task.status)).length >= 100) throw new Error('项目未完成任务已达100项，请先处理');
-    const scientific = options.workflow === 'd2p_local';
-    const requiredTool = options.workflow === 'simulated_external' ? 'simulated_external' : scientific ? 'd2p_local' : 'synthetic_count';
+    const scientific = options.workflow === 'd2p_local' || options.workflow === 'protein_factory_remote';
+    const requiredTool = options.workflow === 'protein_factory_remote' ? 'protein_factory_remote' : options.workflow === 'simulated_external' ? 'simulated_external' : scientific ? 'd2p_local' : 'synthetic_count';
     if (authorizedTools.some((tool) => tool !== requiredTool)) throw new Error('任务模式不提供所请求工具');
     const decisions: TaskDecision[] = [];
     let preflight: ResearchTask['preflight'];
-    if (scientific) {
+    if (options.workflow === 'd2p_local') {
       if (!options.specialtyAcknowledged || !options.inputVersionId || !options.parameters || !['preserve', 'add', 'ask'].includes(options.parameters.stopPolicy)) throw new Error('请明确选择 D2P 专项本地实验、固定输入与终止符策略');
       const fixed = await getInputs(options.inputVersionId, String(conversationId));
       if (options.parameters.stopPolicy === 'ask') {
@@ -187,6 +188,10 @@ export function createLocalAgent(directory: string, getInputs: (id: string, conv
       }
     }
     if (!authorizedTools.includes(requiredTool)) decisions.push(toolDecision(requiredTool));
+    if (options.workflow === 'protein_factory_remote') {
+      if (!options.specialtyAcknowledged || !options.inputVersionId || !options.parameters || !['preserve', 'add'].includes(options.parameters.stopPolicy)) throw new Error('请明确选择 ProteinFactory 远端专项、固定输入与终止符策略');
+      await getInputs(options.inputVersionId, String(conversationId));
+    }
     if (options.workflow === 'simulated_external' && !options.simulation) throw new Error('模拟任务参数不完整');
     const task: ResearchTask = { ...options, workflow: options.workflow || 'validation', id: randomUUID(), conversationId: String(conversationId), requestId, goal,
       authorizedTools: [...authorizedTools], isolatedExecution: true, admission: { authorizedTools: [...authorizedTools], options }, decisions,
@@ -196,6 +201,58 @@ export function createLocalAgent(directory: string, getInputs: (id: string, conv
     await harness.commit(async (tx) => { (await tx.doc(Ledger)).tasks.push(task); }, ctx);
     if (task.status === 'needs_decision') return task;
     return enqueue(task.id);
+  }
+  async function runRemote(task: ResearchTask, signal: AbortSignal) {
+    if (!task.authorizedTools.includes('protein_factory_remote') || !task.specialtyAcknowledged || !task.inputVersionId || !task.parameters) throw new Error('缺少远端专项授权或固定输入');
+    if (task.remoteAttempts?.length && task.retryRemoteApproved !== task.remoteAttempts.at(-1)?.id) throw new Error('已有远端尝试，必须先核对并明确决定重试');
+    const fixed = await getInputs(task.inputVersionId, task.conversationId);
+    for (const execution of task.toolExecutions) if (execution.artifacts?.length || execution.artifact) await verifyCompleted(execution, '已有远端结果产物改变，不能重提');
+    const previous = task.toolExecutions.filter((execution) => execution.result && 'records' in execution.result).at(-1)?.result as ScienceResult | undefined;
+    const attemptId = randomUUID();
+    // This identity is a local audit identity, NOT a server-side idempotency guarantee.
+    const requestKey = `silicolab-${task.id}-${attemptId}`;
+    await harness.commit(async (tx) => {
+      const saved = (await tx.doc(Ledger)).tasks.find((item) => item.id === task.id)!;
+      saved.remoteAttempts = [...(saved.remoteAttempts || []), { id: requestKey, status: 'submitting', createdAt: new Date().toISOString() }];
+      delete saved.retryRemoteApproved;
+      saved.status = 'running'; saved.startedAt = new Date().toISOString();
+      saved.toolExecutions.push({ id: attemptId, toolTaskId: 0, callId: requestKey, tool: 'protein_factory_remote', input: 'ProteinFactory 远端 · 固定输入 · 非模型 provider', status: 'running', progress: 0 });
+    }, ctx);
+    try {
+      const response = await runScience({ workflow: 'protein_factory_remote', specialtyAcknowledged: true, inputVersionId: fixed.id, inputVersion: { id: fixed.id, conversationId: fixed.conversationId, createdAt: fixed.createdAt }, inputs: fixed.inputs, parameters: task.parameters,
+        task: { id: task.id, conversationId: task.conversationId, requestId: task.requestId, goal: task.goal, createdAt: task.createdAt, parameters: task.parameters, inputVersionId: fixed.id },
+        attempt: { id: attemptId, requestKey }, previousRecords: previous?.records }, signal, async (pid) => {
+          await harness.commit(async (tx) => { (await tx.doc(Ledger)).tasks.find((item) => item.id === task.id)!.toolExecutions.find((item) => item.id === attemptId)!.pythonPid = pid; }, ctx);
+        });
+      const artifacts: Artifact[] = [];
+      for (const item of response.files) {
+        if (!['synthesis.fasta', 'synthesis.xlsx', 'records.zip'].includes(item.name) && !/^sequence-\d{3}\.fasta$/.test(item.name)) throw new Error('远端工具返回未声明的产物');
+        const bytes = Buffer.from(item.contentBase64, 'base64');
+        const path = `.silicolab/outputs/${task.id}/${attemptId}/${item.name}`;
+        await files.write(path, bytes);
+        artifacts.push({ name: item.name, mediaType: item.mediaType, path, size: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') });
+      }
+      const report = Buffer.from(JSON.stringify(response.result) + '\n');
+      const path = `.silicolab/outputs/${task.id}/${attemptId}/record.json`;
+      await files.write(path, report);
+      artifacts.push({ name: 'record.json', mediaType: 'application/json', path, size: report.length, sha256: createHash('sha256').update(report).digest('hex') });
+      await harness.commit(async (tx) => {
+        const saved = (await tx.doc(Ledger)).tasks.find((item) => item.id === task.id)!;
+        const unknown = response.result.status === 'unknown';
+        saved.remoteAttempts!.find((item) => item.id === requestKey)!.status = unknown ? 'unknown' : 'completed';
+        Object.assign(saved.toolExecutions.find((item) => item.id === attemptId)!, { status: unknown ? 'unknown' : response.result.status === 'failed' ? 'failed' : 'completed', progress: 100, result: response.result, artifacts });
+        saved.status = unknown ? 'result_unknown' : 'answered'; saved.finishedAt = new Date().toISOString();
+        delete saved.error;
+      }, ctx);
+    } catch (error) {
+      await harness.commit(async (tx) => {
+        const saved = (await tx.doc(Ledger)).tasks.find((item) => item.id === task.id)!;
+        const status = error instanceof ScienceFailure && error.requestMayHaveExecuted === false ? 'failed' : 'unknown';
+        Object.assign(saved.remoteAttempts!.find((item) => item.id === requestKey)!, { status, reason: String(error) });
+        Object.assign(saved.toolExecutions.find((item) => item.id === attemptId)!, { status, error: String(error) });
+        saved.status = status === 'failed' ? 'failed' : 'result_unknown'; saved.error = String(error);
+      }, ctx);
+    }
   }
   async function saveExternalReceipt(taskId: string, receipt: ExternalReceipt, preserveLocalStatus = false) {
     await harness.commit(async (tx) => {
@@ -323,6 +380,18 @@ export function createLocalAgent(directory: string, getInputs: (id: string, conv
     return pumping;
   }
   async function launch(task: ResearchTask) {
+    if (task.workflow === 'protein_factory_remote') {
+      const controller = new AbortController();
+      const done = runRemote(task, controller.signal).catch(async (error) => {
+        await harness.commit(async (tx) => { const saved = (await tx.doc(Ledger)).tasks.find((item) => item.id === task.id)!; saved.status = 'paused'; saved.pauseReason = String(error); }, ctx);
+      }).finally(() => {
+        remoteRuns.delete(task.id);
+        if (activeTaskId === task.id) { activeTaskId = undefined; activeKernel = undefined; executions.pin(undefined); }
+        if (!stopping) void pump();
+      });
+      remoteRuns.set(task.id, { controller, done });
+      return;
+    }
     if (task.workflow === 'simulated_external') {
       if (task.externalJob?.result) await completeExternal(task);
       else await submitExternal(task, task.externalJob?.retryApproved === true);
@@ -365,6 +434,10 @@ export function createLocalAgent(directory: string, getInputs: (id: string, conv
     const saved = await tasks();
     const changes: { id: string; status: string; reason?: string }[] = [];
     for (const task of saved) {
+      if (task.workflow === 'protein_factory_remote' && task.status === 'running' && task.remoteAttempts?.some((attempt) => attempt.status === 'submitting')) {
+        changes.push({ id: task.id, status: 'result_unknown', reason: '远端请求可能已执行，宿主中断后必须先核对，不自动重提' });
+        continue;
+      }
       if (task.status === 'external_submitting') {
         changes.push({ id: task.id, status: 'result_unknown', reason: '模拟服务可能已接受；必须先对账，不自动重提' });
         continue;
@@ -389,6 +462,10 @@ export function createLocalAgent(directory: string, getInputs: (id: string, conv
         if (change.status === 'result_unknown' && task.externalJob) {
           task.externalJob.state = 'unknown'; task.externalJob.error = change.reason!;
         }
+        if (change.status === 'result_unknown' && task.workflow === 'protein_factory_remote') {
+          for (const attempt of task.remoteAttempts || []) if (attempt.status === 'submitting') { attempt.status = 'unknown'; attempt.reason = change.reason; }
+          for (const execution of task.toolExecutions) if (execution.status === 'running') { execution.status = 'unknown'; execution.error = change.reason; }
+        }
         if (change.status === 'paused') {
           task.pauseReason = change.reason!;
           for (const execution of task.toolExecutions) if (execution.status === 'running') execution.status = 'paused';
@@ -399,11 +476,16 @@ export function createLocalAgent(directory: string, getInputs: (id: string, conv
   async function preparePause(taskId: string) {
     const task = (await tasks()).find((task) => task.id === taskId);
     if (!task) throw new Error('任务不存在');
+    if (task.workflow === 'protein_factory_remote' && remoteRuns.has(taskId)) {
+      const run = remoteRuns.get(taskId)!; run.controller.abort(); await run.done;
+      return { needsClose: false, task: (await tasks()).find((task) => task.id === taskId)! };
+    }
+    if (task.workflow === 'protein_factory_remote' && task.remoteAttempts?.length && !['queued', 'admission_pending'].includes(task.status)) return { needsClose: false, task };
     if (['waiting_external', 'result_unknown', 'external_submitting'].includes(task.status)) {
       await harness.commit(async (tx) => { const saved = (await tx.doc(Ledger)).tasks.find((task) => task.id === taskId)!; saved.status = 'paused'; saved.pauseReason = '暂停本机跟踪；独立作业未取消'; }, ctx);
       return { needsClose: false, task: (await tasks()).find((task) => task.id === taskId)! };
     }
-    if (task.status === 'queued') {
+    if (task.status === 'admission_pending' || task.status === 'queued') {
       await harness.commit(async (tx) => { const saved = (await tx.doc(Ledger)).tasks.find((task) => task.id === taskId)!; saved.status = 'paused'; saved.pauseReason = '用户暂停排队任务'; }, ctx);
       return { needsClose: false, task: (await tasks()).find((task) => task.id === taskId)! };
     }
@@ -426,6 +508,7 @@ export function createLocalAgent(directory: string, getInputs: (id: string, conv
     const task = (await tasks()).find((task) => task.id === taskId);
     if (!task) throw new Error('任务不存在');
     if (task.status !== 'paused') return task;
+    if (task.workflow === 'protein_factory_remote') return !task.remoteAttempts?.length || task.retryRemoteApproved === task.remoteAttempts.at(-1)?.id ? enqueue(task.id) : reconcileScience(taskId);
     if (task.workflow === 'simulated_external') return task.externalJob?.state === 'not_submitted' ? enqueue(task.id) : reconcileExternal(taskId);
     const { conversationId, pending } = await borrowKernel(task, async (kernel) => ({
       conversationId: task.isolatedExecution ? (await kernel.root(ctx)).id : Number(task.conversationId) as ConversationId,
@@ -451,6 +534,25 @@ export function createLocalAgent(directory: string, getInputs: (id: string, conv
     if (task.decisions?.some((decision) => decision.status !== 'answered')) throw new Error('仍有待答复问题');
     return enqueue(task.id);
   }
+  async function reconcileScience(taskId: string) {
+    const task = (await tasks()).find((item) => item.id === taskId);
+    if (!task || task.workflow !== 'protein_factory_remote') throw new Error('该任务不是远端科学请求');
+    if (['answered', 'cancelled', 'queued', 'running', 'admission_pending'].includes(task.status)) return task;
+    if (task.status === 'paused' && task.retryRemoteApproved === task.remoteAttempts?.at(-1)?.id) return task;
+    const unknown = task.remoteAttempts?.at(-1);
+    if (!unknown || !['unknown', 'submitting'].includes(unknown.status)) return task;
+    await harness.commit(async (tx) => {
+      const saved = (await tx.doc(Ledger)).tasks.find((item) => item.id === taskId)!;
+      saved.status = 'needs_decision';
+      if (!saved.decisions) saved.decisions = [];
+      const attempt = saved.remoteAttempts!.find((item) => item.id === unknown.id)!;
+      attempt.reconciledAt = new Date().toISOString(); attempt.queryAvailable = false;
+      const prior = saved.decisions.find((decision) => decision.kind === 'science_retry' && decision.uncertainty?.attempt === unknown.id);
+      if (!prior) saved.decisions.push(scienceRetryDecision({ attempt: unknown.id, inputVersionId: task.inputVersionId!, transportTimeout: true, queryAvailable: false }));
+      else if (prior.status === 'answered') saved.status = 'result_unknown';
+    }, ctx);
+    return (await tasks()).find((item) => item.id === taskId)!;
+  }
   async function answer(taskId: string, decisionId: string, value: string) {
     const task = (await tasks()).find((item) => item.id === taskId);
     const decision = task?.decisions?.find((item) => item.id === decisionId);
@@ -462,17 +564,24 @@ export function createLocalAgent(directory: string, getInputs: (id: string, conv
     }
     if (task.status !== 'needs_decision') throw new Error('任务当前不等待决定');
     const last = task.decisions!.filter((item) => item.status === 'pending').length === 1;
-    if (last && value !== 'decline') {
-      if (task.workflow === 'd2p_local') await getInputs(task.inputVersionId!, task.conversationId);
+    if (last && value !== 'decline' && value !== 'keep_unknown') {
+      if (task.workflow === 'd2p_local' || task.workflow === 'protein_factory_remote') await getInputs(task.inputVersionId!, task.conversationId);
+      if (task.workflow === 'protein_factory_remote') for (const execution of task.toolExecutions) {
+        if (execution.artifacts?.length || execution.artifact) await verifyCompleted(execution, '已有远端结果产物改变，不能重试');
+      }
     }
     await harness.commit(async (tx) => {
       const saved = (await tx.doc(Ledger)).tasks.find((item) => item.id === taskId)!;
       const question = saved.decisions!.find((item) => item.id === decisionId)!;
       question.status = 'answered'; question.answer = value; question.answeredAt = new Date().toISOString();
       if (question.kind === 'terminal_stop') saved.parameters = { ...saved.parameters!, stopPolicy: value as 'preserve' | 'add' };
-      if (question.kind === 'tool_authorization' && value === 'grant') saved.authorizedTools = [saved.workflow === 'simulated_external' ? 'simulated_external' : saved.workflow === 'd2p_local' ? 'd2p_local' : 'synthetic_count'];
+      if (question.kind === 'tool_authorization' && value === 'grant') saved.authorizedTools = [saved.workflow === 'simulated_external' ? 'simulated_external' : saved.workflow === 'protein_factory_remote' ? 'protein_factory_remote' : saved.workflow === 'd2p_local' ? 'd2p_local' : 'synthetic_count'];
       if (question.kind === 'external_retry') {
         if (value === 'retry_same_identity') saved.externalJob!.retryApproved = true;
+        else saved.status = 'result_unknown';
+      }
+      if (question.kind === 'science_retry') {
+        if (value === 'retry_remote') saved.retryRemoteApproved = question.uncertainty!.attempt;
         else saved.status = 'result_unknown';
       }
       if (value === 'decline') saved.status = 'cancelled';
@@ -484,6 +593,12 @@ export function createLocalAgent(directory: string, getInputs: (id: string, conv
   async function cancel(taskId: string) {
     const task = (await tasks()).find((task) => task.id === taskId);
     if (!task) throw new Error('任务不存在');
+    if (task.workflow === 'protein_factory_remote' && remoteRuns.has(taskId)) {
+      const run = remoteRuns.get(taskId)!; run.controller.abort(); await run.done;
+      // Stopping this client cannot prove that the service cancelled its effect.
+      return (await tasks()).find((task) => task.id === taskId)!;
+    }
+    if (task.workflow === 'protein_factory_remote' && task.remoteAttempts?.length && !['admission_pending', 'queued', 'paused'].includes(task.status)) return task;
     if (['needs_decision', 'admission_pending', 'queued', 'paused', 'waiting_external', 'result_unknown', 'external_submitting'].includes(task.status)) {
       await harness.commit(async (tx) => { (await tx.doc(Ledger)).tasks.find((item) => item.id === taskId)!.status = 'cancelled'; }, ctx);
       return (await tasks()).find((item) => item.id === taskId)!;
@@ -511,7 +626,12 @@ export function createLocalAgent(directory: string, getInputs: (id: string, conv
     return { ...stored, contentBase64: bytes.toString('base64') };
   }
   async function inspection() { return (activeKernel || harness).inspect(ctx); }
-  async function closeExecutions() { stopping = true; await executions.closeAll(); activeTaskId = undefined; activeKernel = undefined; }
+  async function closeExecutions() {
+    stopping = true;
+    for (const run of remoteRuns.values()) run.controller.abort();
+    await Promise.all([...remoteRuns.values()].map((run) => run.done));
+    await executions.closeAll(); activeTaskId = undefined; activeKernel = undefined;
+  }
   async function conversation(conversationId: ConversationId) {
     const chat = (await harness.conversation(conversationId, ctx))!;
     const entries = [];
@@ -532,6 +652,6 @@ export function createLocalAgent(directory: string, getInputs: (id: string, conv
       tasks: ownTasks, modelRequests: (await harness.snapshot(Ledger, ctx))?.modelRequests || 0,
       scheduling: (await inspection()).scheduling };
   }
-  return { models, registry, bind(value: Harness) { harness = value; }, start, tasks, conversation, cancel, artifact, answer, continueTask, reconcileOpen, preparePause, resume, inspection, closeExecutions, reconcileExternal, cancelExternal,
+  return { models, registry, bind(value: Harness) { harness = value; }, start, tasks, conversation, cancel, artifact, answer, continueTask, reconcileOpen, preparePause, resume, inspection, closeExecutions, reconcileExternal, cancelExternal, reconcileScience,
     async modelRequests() { return (await harness.snapshot(Ledger, ctx))?.modelRequests || 0; } };
 }

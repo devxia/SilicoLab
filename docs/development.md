@@ -124,6 +124,19 @@ worker 的网络拒绝钩子只针对可信科学入口，不能代替不可信 
 
 应用数据旁 `simulated-executor.sqlite3` 是独立验证服务的状态，不属于真实科研项目结果；它不会在退出时删除或自动取消作业。任务面板有明显模拟标记，公开请求不能指定任意端点。
 
+## 显式 ProteinFactory 远端
+
+[#13 远端科学契约](proteinfactory-remote.md) 区分模型 provider 与科学上传授权；专项远端复用原传输/校验/导出。超时/断线/中断保留结果未知，先核对本机记录，无已验证查询接口时等待明确决定；不自动回退或重提。
+
+```bash
+.venv/bin/python -B -m unittest discover -s backend/tests -p test_workbench_remote.py -v
+# 专用8767夹具，只有人工回环响应（不要与普通夹具同时运行）
+.venv/bin/python -B tests/e2e/fixtures/remote_workbench_fixture.py
+.venv/bin/python -B tests/e2e/browser_workbench_remote.py
+```
+
+专用夹具验证实际上传、产物、unknown和明确重试；普通工作台夹具把新科学传输指向回环拒绝端口，避免误触真实服务。`outputs/ui/remote-science/` 不提交。真实科学服务调用不在本次自动化授权中。
+
 ## 常规检查
 
 ```bash

@@ -1,10 +1,12 @@
 import { useRef, useState } from 'react';
 import { request, type Project } from './client';
 
-export default function LocalScienceForm({ project, conversationId }: { project: Project; conversationId: string }) {
+export default function LocalScienceForm({ project, conversationId, source = 'local' }: { project: Project; conversationId: string; source?: 'local' | 'remote' }) {
+  const remote = source === 'remote';
+  const workflow = remote ? 'protein_factory_remote' : 'd2p_local';
   const [versionId, setVersionId] = useState('');
   const [acknowledged, setAcknowledged] = useState(false);
-  const [stopPolicy, setStopPolicy] = useState<'preserve' | 'add' | 'ask'>('ask');
+  const [stopPolicy, setStopPolicy] = useState<'preserve' | 'add' | 'ask'>(remote ? 'preserve' : 'ask');
   const [avoid, setAvoid] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -14,27 +16,27 @@ export default function LocalScienceForm({ project, conversationId }: { project:
   async function run() {
     if (busy) return;
     setBusy(true); setError('');
-    const key = JSON.stringify({ project: project.id, conversationId, versionId, stopPolicy, avoid, acknowledged });
+    const key = JSON.stringify({ project: project.id, conversationId, source, versionId, stopPolicy, avoid, acknowledged });
     if (identity.current?.key !== key) identity.current = { key, id: crypto.randomUUID() };
     try {
       await request(`/projects/${project.id}/tasks`, 'POST', {
         conversationId, requestId: identity.current.id,
-        goal: '使用 ProteinFactory / D2P 专项的本地实验，按固定输入和所选终止符及避免位点处理、校验并导出。',
-        workflow: 'd2p_local', specialtyAcknowledged: acknowledged, inputVersionId: versionId,
-        authorizedTools: ['d2p_local'], parameters: { stopPolicy, avoid },
+        goal: remote ? '使用 ProteinFactory 远端，按固定输入和所选终止符及避免位点处理、校验并导出。' : '使用 ProteinFactory / D2P 专项的本地实验，按固定输入和所选终止符及避免位点处理、校验并导出。',
+        workflow, specialtyAcknowledged: acknowledged, inputVersionId: versionId,
+        authorizedTools: [workflow], parameters: { stopPolicy, avoid },
       });
       identity.current = null; setStarted(true);
     } catch (error) { setError((error as Error).message); }
     finally { setBusy(false); }
   }
-  return <section className="wb-local-form" aria-label="D2P 专项本地实验任务">
-    <h3>D2P 专项 · 本地实验</h3><p>实际计算来源：本地 Python 实验引擎。不会调用 ProteinFactory 远端。模型只编排工具，不自行生成 DNA。</p>
+  return <section className="wb-local-form" aria-label={remote ? 'ProteinFactory 远端专项任务' : 'D2P 专项本地实验任务'}>
+    <h3>{remote ? 'ProteinFactory · 远端专项' : 'D2P 专项 · 本地实验'}</h3>{remote ? <p>实际计算来源：ProteinFactory 远端科学服务。会上传所选固定输入序列及科学参数；这不是模型 provider 授权。不会自动回退到本地，超时或断线时先核对、不能查明则等待决定。</p> : <p>实际计算来源：本地 Python 实验引擎。不会调用 ProteinFactory 远端。模型只编排工具，不自行生成 DNA。</p>}
     <p>D2P 无细胞体系、pD2P_1.08t、预设插入位置专项；尚无载体校验，不能用于任意宿主或载体。</p>
     <label>固定输入版本<select value={versionId} disabled={busy} onChange={(event) => { setVersionId(event.target.value); setStarted(false); }}><option value="">请先在文件区固定 FASTA 输入</option>{versions.map((version) => <option key={version.id} value={version.id}>{version.id.slice(0, 8)} · {version.inputs.map((input) => `${input.name} v${input.version}`).join('、')}</option>)}</select></label>
-    <label>终止符策略<select value={stopPolicy} disabled={busy} onChange={(event) => { setStopPolicy(event.target.value as 'preserve' | 'add' | 'ask'); setStarted(false); }}><option value="ask">缺少末尾终止符时保存问题，稍后决定</option><option value="preserve">保留输入终止符，不自动补充</option><option value="add">明确补充末尾终止符 *</option></select></label>
+    <label>终止符策略<select value={stopPolicy} disabled={busy} onChange={(event) => { setStopPolicy(event.target.value as 'preserve' | 'add' | 'ask'); setStarted(false); }}>{!remote && <option value="ask">缺少末尾终止符时保存问题，稍后决定</option>}<option value="preserve">保留输入终止符，不自动补充</option><option value="add">明确补充末尾终止符 *</option></select></label>
     <label>正反向避免位点<input value={avoid} disabled={busy} placeholder="例如 GAATTC,GGTCTC" onChange={(event) => { setAvoid(event.target.value); setStarted(false); }} /></label>
-    <label className="wb-scope-check"><input type="checkbox" checked={acknowledged} disabled={busy} onChange={(event) => setAcknowledged(event.target.checked)} />我明确使用 D2P 专项的本地实验，不使用远端</label>
+    <label className="wb-scope-check"><input type="checkbox" checked={acknowledged} disabled={busy} onChange={(event) => setAcknowledged(event.target.checked)} />{remote ? '我明确使用 ProteinFactory 远端专项，并授权上传所选序列' : '我明确使用 D2P 专项的本地实验，不使用远端'}</label>
     {error && <p role="alert">{error}</p>}
-    <button className="button primary" disabled={busy || !acknowledged || !versionId || started} onClick={run}>{busy ? '正在提交…' : started ? '已提交本地任务' : '运行 D2P 专项本地实验'}</button>
+    <button className="button primary" disabled={busy || !acknowledged || !versionId || started} onClick={run}>{busy ? '正在提交…' : started ? remote ? '已提交远端任务' : '已提交本地任务' : remote ? '运行 ProteinFactory 远端专项' : '运行 D2P 专项本地实验'}</button>
   </section>;
 }

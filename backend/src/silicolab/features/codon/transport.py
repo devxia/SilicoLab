@@ -5,14 +5,24 @@ from urllib.error import HTTPError
 from silicolab.features.codon import client as codon
 
 
-async def optimize_remote(payload):
+async def optimize_remote(payload, *, endpoint=None, timeout=120, max_response_bytes=None):
     # Import only when a remote task actually starts; local-only sessions do not
     # pay the HTTP client import/memory cost or create executor threads.
     import httpx
-    url = codon.BASE_URL + '/toDnaAjaxCodon'
+    url = endpoint or codon.BASE_URL + '/toDnaAjaxCodon'
     try:
-        async with httpx.AsyncClient(timeout=120, follow_redirects=True) as client:
-            response = await client.post(url, json=payload, headers={'Accept': 'application/json'})
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=endpoint is None, trust_env=False) as client:
+            if max_response_bytes is None:
+                response = await client.post(url, json=payload, headers={'Accept': 'application/json'})
+            else:
+                async with client.stream('POST', url, json=payload, headers={'Accept': 'application/json'}) as stream:
+                    chunks, size = [], 0
+                    async for chunk in stream.aiter_bytes():
+                        size += len(chunk)
+                        if size > max_response_bytes:
+                            raise codon.OptimizationError('远端响应超过协议上限')
+                        chunks.append(chunk)
+                    response = httpx.Response(stream.status_code, content=b''.join(chunks), request=stream.request)
         response.raise_for_status()
     except httpx.HTTPStatusError as exc:
         cause = HTTPError(url, exc.response.status_code, exc.response.reason_phrase, {}, None)

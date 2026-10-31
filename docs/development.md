@@ -150,6 +150,16 @@ worker 的网络拒绝钩子只针对可信科学入口，不能代替不可信 
 
 自动化仅使用人工key、临时注入库和回环服务；另有macOS Keychain随机人工条目的增删读写验证。不能据此宣称真实provider或完整分发已验收。
 
+## 请求边界模型切换、用量与有限重试
+
+[#15 请求契约](model-requests.md) 在当前请求/工具不中断的情况下为下一实际请求选择接收方，保留必要历史并按请求记录真实来源、用量及未知价格。断流/临时网络/429有限退避重试，失败停放且明确恢复不重复完成工具，无费用预算自动暂停。
+
+```bash
+.venv/bin/python -B -m unittest discover -s backend/tests -p test_model_requests.py -v
+.venv/bin/python -B tests/e2e/fixtures/model_requests_fixture.py
+.venv/bin/python -B tests/e2e/browser_workbench_model_requests.py
+```
+
 ## 常规检查
 
 ```bash

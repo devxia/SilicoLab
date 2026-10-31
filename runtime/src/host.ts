@@ -29,7 +29,7 @@ const agent = createLocalAgent(dirname(resolve(directory)), async (versionId, co
   const version = project.inputVersions?.find((input) => input.id === versionId && input.conversationId === conversationId);
   if (!version) throw new Error('当前对话没有该固定输入版本');
   return files.fixed(version);
-});
+}, async (conversationId) => (await durable.snapshot(Chat, Number(conversationId) as ConversationId, ctx))?.modelConfigurationId);
 const harness = await Harness.open(await openNodeSqliteStorage(join(resolve(directory), 'session.sqlite')), {
   models: agent.models, registry: agent.registry,
   settings: { compaction: { enabled: false }, retry: { maxRetries: 0 }, restartLimit: 3, progress: { partialIntervalMs: 30, outputIntervalMs: 30 } },

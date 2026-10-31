@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { BACKGROUND_CONTEXT, type Context } from '@earendil-works/chord/context';
-import { Type } from '@earendil-works/pi-ai';
+import { Type, type TranscriptContext } from '@earendil-works/pi-ai';
 import { createModels } from '@earendil-works/pi-ai/models';
 import { fauxAssistantMessage, fauxProvider, fauxToolCall } from '@earendil-works/pi-ai/providers/faux';
 import { createRegistry, defineDoc, defineExtension, defineTool, LiveDoc, type ConversationId, type Harness, type SubmissionId, type ToolExecutionApi } from '@earendil-works/pi-durable';
@@ -9,21 +9,22 @@ import { ProjectFiles } from './inputs.ts';
 import { runScience, ScienceFailure, type ScienceOptions, type ScienceResult } from './science.ts';
 import { scienceRetryDecision, retryExternalDecision, stopDecision, toolDecision, type TaskDecision } from './decisions.ts';
 import { ExecutionOwner, ExecutionStores } from './executions.ts';
-import { configuredProvider, resolveModel } from './model-configuration.ts';
+import { resolveModel } from './model-configuration.ts';
+import { RequestBoundaryError, requestProvider, type ModelRequest } from './model-requests.ts';
 import { SimulatedJobClient, type ExternalJob, type ExternalReceipt } from './external.ts';
 
 const ctx = BACKGROUND_CONTEXT;
 type Artifact = { path: string; sha256: string; size: number; name?: string; mediaType?: string };
 type ExecutionResult = { characters: number; jobId?: string; payloadHash?: string; requestKey?: string; payload?: string; kind?: string } | ScienceResult;
-type Execution = { id: string; toolTaskId: number; callId: string; tool: string; input: string; progress: number; status: string; error?: string; pythonPid?: number; artifact?: Artifact; artifacts?: Artifact[]; result?: ExecutionResult };
-export type ResearchTask = ScienceOptions & { id: string; conversationId: string; requestId: string; goal: string; status: string; authorizedTools: string[]; createdAt: string; submissionId?: SubmissionId; toolExecutions: Execution[]; error?: string; pauseReason?: string; externalJob?: ExternalJob; retryRemoteApproved?: string; remoteAttempts?: { id: string; status: string; reason?: string; createdAt: string; reconciledAt?: string; queryAvailable?: boolean }[]; isolatedExecution?: boolean; queuedAt?: string; startedAt?: string; finishedAt?: string; decisions?: TaskDecision[]; admission?: { authorizedTools: string[]; options: ScienceOptions }; preflight?: { missingStopNames: string[]; inputVersionId: string } };
+type Execution = { inputFingerprint?: string; id: string; toolTaskId: number; callId: string; tool: string; input: string; progress: number; status: string; error?: string; pythonPid?: number; artifact?: Artifact; artifacts?: Artifact[]; result?: ExecutionResult };
+export type ResearchTask = ScienceOptions & { modelRequests?: ModelRequest[]; modelBoundaryError?: string; recoveryRequestId?: string; id: string; conversationId: string; requestId: string; goal: string; status: string; authorizedTools: string[]; createdAt: string; submissionId?: SubmissionId; toolExecutions: Execution[]; error?: string; pauseReason?: string; externalJob?: ExternalJob; retryRemoteApproved?: string; remoteAttempts?: { id: string; status: string; reason?: string; createdAt: string; reconciledAt?: string; queryAvailable?: boolean }[]; isolatedExecution?: boolean; queuedAt?: string; startedAt?: string; finishedAt?: string; decisions?: TaskDecision[]; admission?: { authorizedTools: string[]; options: ScienceOptions }; preflight?: { missingStopNames: string[]; inputVersionId: string } };
 const Ledger = defineDoc<{ tasks: ResearchTask[]; modelRequests: number; queue?: string[] }>({
   kind: 'silicolab.tasks', version: 1, scope: 'session', initial: () => ({ tasks: [], modelRequests: 0 }), checkpointWhen: () => true,
 });
 type FixedInputs = Awaited<ReturnType<ProjectFiles['fixed']>>;
 
 /** Model adapter and controlled tools. Only pi-durable owns the agent loop. */
-export function createLocalAgent(directory: string, getInputs: (id: string, conversationId: string) => Promise<FixedInputs>) {
+export function createLocalAgent(directory: string, getInputs: (id: string, conversationId: string) => Promise<FixedInputs>, getModelSelection: (conversationId: string) => Promise<string | undefined>) {
   let harness: Harness;
   const files = new ProjectFiles(directory);
   const external = new SimulatedJobClient();
@@ -40,7 +41,6 @@ export function createLocalAgent(directory: string, getInputs: (id: string, conv
   models.setProvider(faux.provider);
   const response: Parameters<typeof faux.setResponses>[0][number] = async (transcript, options) => {
     faux.appendResponses([response]);
-    await harness.commit(async (tx) => { (await tx.doc(Ledger)).modelRequests++; }, ctx);
     const last = transcript.messages.at(-1);
     if (last?.role === 'toolResult') {
       // Faux adapter models an observable, cancellable in-flight final request.
@@ -59,6 +59,35 @@ export function createLocalAgent(directory: string, getInputs: (id: string, conv
     return fauxAssistantMessage([fauxToolCall(tool, tool === 'synthetic_count' ? { text } : {}, { id: randomUUID() })], { stopReason: 'toolUse' });
   };
   faux.setResponses([response]);
+  models.setProvider({ ...faux.provider, ...requestProvider(async () => {
+    const task = (await tasks()).find((item) => item.id === activeTaskId);
+    if (!task) throw new Error('请求未关联当前任务');
+    const id = await getModelSelection(task.conversationId);
+    const configuration = id ? await resolveModel(id) : null;
+    const history: TranscriptContext['messages'][number][] = [];
+    for (const prior of (await tasks()).filter((item) => item.conversationId === task.conversationId && item.id !== task.id && item.createdAt <= task.createdAt && item.submissionId !== undefined)) {
+      await borrowKernel(prior, async (kernel) => {
+        const chat = prior.isolatedExecution ? await kernel.root(ctx) : (await kernel.conversation(Number(prior.conversationId) as ConversationId, ctx))!;
+        let cursor;
+        do { const page = await chat.entries({ order: 'ascending' }, 200, cursor, ctx); for (const entry of page.items) history.push(...(entry.model || [])); cursor = page.next; } while (cursor);
+      });
+    }
+    if (JSON.stringify(history).length > 1000000) {
+      const reason = '必要历史超过安全请求上限，未静默删减；需先明确整理历史或新建对话';
+      await harness.commit(async (tx) => { (await tx.doc(Ledger)).tasks.find((item) => item.id === task.id)!.modelBoundaryError = reason; }, ctx);
+      throw new RequestBoundaryError(reason);
+    }
+    return { taskId: task.id, configuration, history };
+  }, async (request) => {
+    await harness.commit(async (tx) => {
+      const ledger = await tx.doc(Ledger);
+      const task = ledger.tasks.find((item) => item.id === request.taskId)!;
+      if (!task.modelRequests) task.modelRequests = [];
+      const index = task.modelRequests.findIndex((item) => item.id === request.id);
+      if (index < 0) { task.modelRequests.push(structuredClone(request)); ledger.modelRequests++; }
+      else task.modelRequests[index] = structuredClone(request);
+    }, ctx);
+  }, faux.provider) });
 
   async function verifyCompleted(execution: Execution, message: string) {
     for (const stored of [...(execution.artifacts || []), ...(execution.artifact ? [execution.artifact] : [])]) {
@@ -66,13 +95,14 @@ export function createLocalAgent(directory: string, getInputs: (id: string, conv
       if (createHash('sha256').update(bytes).digest('hex') !== stored.sha256) throw new Error(message);
     }
   }
-  async function tracked(tool: string, input: string, api: ToolExecutionApi, context: Context,
+  async function tracked(tool: string, input: string, parameters: unknown, api: ToolExecutionApi, context: Context,
     work: (task: ResearchTask, id: string, progress: (value: number, pythonPid?: number) => Promise<void>) => Promise<{ result: ExecutionResult; artifact?: Artifact; artifacts?: Artifact[]; isError?: boolean; error?: string }>) {
     const live = await api.snapshot(LiveDoc, api.conversationId, ctx);
     if (live?.run?.inputs.length !== 1) throw new Error('工具无法关联唯一内核输入');
     const task = await taskForSubmission(api.conversationId, live.run.inputs[0]);
     if (!task.authorizedTools.includes(tool)) throw new Error('需要用户决定：当前任务未授权所需工具');
-    const completed = task.toolExecutions.find((execution) => execution.toolTaskId === api.taskId && execution.status === 'completed');
+    const inputFingerprint = createHash('sha256').update(JSON.stringify({ tool, parameters, inputVersionId: task.inputVersionId, science: task.parameters })).digest('hex');
+    const completed = task.toolExecutions.find((execution) => execution.status === 'completed' && execution.tool === tool && (execution.toolTaskId === api.taskId || execution.inputFingerprint === inputFingerprint));
     if (completed?.result) {
       await verifyCompleted(completed, '完成步骤产物完整性不符，需先核对');
       const summary = 'records' in completed.result ? { status: completed.result.status, records: completed.result.records.length } : completed.result;
@@ -80,7 +110,7 @@ export function createLocalAgent(directory: string, getInputs: (id: string, conv
     }
     const id = randomUUID();
     await harness.commit(async (tx) => {
-      (await tx.doc(Ledger)).tasks.find((item) => item.id === task.id)!.toolExecutions.push({ id, toolTaskId: api.taskId, callId: api.callId, tool, input, status: 'running', progress: 0 });
+      (await tx.doc(Ledger)).tasks.find((item) => item.id === task.id)!.toolExecutions.push({ id, toolTaskId: api.taskId, callId: api.callId, tool, input, inputFingerprint, status: 'running', progress: 0 });
     }, context);
     const progress = async (value: number, pythonPid?: number) => {
       api.output(`处理进度 ${value}%\n`);
@@ -114,7 +144,7 @@ export function createLocalAgent(directory: string, getInputs: (id: string, conv
   const countTool = defineTool({
     name: 'synthetic_count', description: '本机验证：统计人工文本 Unicode 字符数量并写出可核对 JSON，不进行生物学推断、科学服务上传或任意脚本。',
     parameters: Type.Object({ text: Type.String({ maxLength: 100000 }) }), replay: 'safe',
-    execute: (args, api, context) => tracked('synthetic_count', args.text.slice(0, 160), api, context, async (task, id, progress) => {
+    execute: (args, api, context) => tracked('synthetic_count', args.text.slice(0, 160), { text: args.text }, api, context, async (task, id, progress) => {
       for (const value of [25, 60, 90]) { await delay(150, undefined, { signal: context.abortSignal }); await progress(value); }
       const result = { characters: [...args.text].length };
       const content = Buffer.from(JSON.stringify({ taskId: task.id, input: args.text, result }) + '\n');
@@ -126,7 +156,7 @@ export function createLocalAgent(directory: string, getInputs: (id: string, conv
   const localTool = defineTool({
     name: 'd2p_local', description: '仅用户明确选择的 ProteinFactory/D2P 本地实验专项：D2P 无细胞体系、pD2P_1.08t、预设插入位置；不适用于普通反向翻译，不宣称已实现载体校验，不连接科学远端。输入与参数取自任务授权记录。',
     parameters: Type.Object({}), replay: 'safe',
-    execute: (_args, api, context) => tracked('d2p_local', 'D2P 本地实验 · 固定输入版本', api, context, async (task, id, progress) => {
+    execute: (_args, api, context) => tracked('d2p_local', 'D2P 本地实验 · 固定输入版本', {}, api, context, async (task, id, progress) => {
       if (task.workflow !== 'd2p_local' || !task.specialtyAcknowledged || !task.inputVersionId || !task.parameters) throw new Error('缺少明确专项、本地来源或固定输入授权');
       const fixed = await getInputs(task.inputVersionId, task.conversationId);
       await progress(10);
@@ -159,7 +189,7 @@ export function createLocalAgent(directory: string, getInputs: (id: string, conv
     const record = await submission?.status(ctx);
     const owner = await kernel.snapshot(ExecutionOwner, ctx);
     const task = record?.conversationId === conversationId && record.requestId
-      ? (await tasks()).find((item) => (owner?.taskId ? item.id === owner.taskId : item.conversationId === String(conversationId)) && item.requestId === record.requestId)
+      ? (await tasks()).find((item) => (owner?.taskId ? item.id === owner.taskId : item.conversationId === String(conversationId)) && (item.requestId === record.requestId || item.recoveryRequestId === record.requestId))
       : undefined;
     if (!task) throw new Error('内核提交未关联已保存任务');
     return task;
@@ -404,7 +434,8 @@ export function createLocalAgent(directory: string, getInputs: (id: string, conv
     activeKernel = kernel;
     const conversationId = task.isolatedExecution ? (await kernel.root(ctx)).id : Number(task.conversationId) as ConversationId;
     // An explicit continuation reconciles any already-admitted input by stable identity.
-    const existing = await kernel.commit((tx) => tx.submissionByRequest(conversationId, task.requestId), ctx);
+    const admissionRequestId = task.recoveryRequestId || task.requestId;
+    const existing = await kernel.commit((tx) => tx.submissionByRequest(conversationId, admissionRequestId), ctx);
     const pending = (await kernel.inspect(ctx)).submissions;
     if (pending.some((submission) => submission.id !== existing?.id)) throw new Error('项目已有在途或待恢复任务，请先处理原任务');
     const scientific = task.workflow === 'd2p_local';
@@ -412,16 +443,11 @@ export function createLocalAgent(directory: string, getInputs: (id: string, conv
     // Queue time can be unbounded: recheck completed evidence at the actual admission boundary.
     for (const execution of task.toolExecutions) if (execution.status === 'completed') await verifyCompleted(execution, '完成产物已改变，准入前需核对');
     const conversation = (await kernel.conversation(conversationId, ctx))!;
-    let selectedModel = { provider: 'faux', modelId: 'faux-1' };
-    if (task.modelConfigurationId) {
-      const configuration = await resolveModel(task.modelConfigurationId);
-      const provider = configuredProvider(configuration);
-      models.setProvider(provider);
-      selectedModel = { provider: provider.id, modelId: configuration.modelId };
-    }
-    await conversation.configure({ model: selectedModel, tools: scientific ? [localTool] : [countTool] }, ctx);
+    const currentConfiguration = await getModelSelection(task.conversationId);
+    if (currentConfiguration) await resolveModel(currentConfiguration);
+    await conversation.configure({ model: { provider: 'faux', modelId: 'faux-1' }, tools: scientific ? [localTool] : [countTool] }, ctx);
     const submission = existing ? (await kernel.submission(existing.id, ctx))!
-      : await conversation.submit({ type: 'input', requestId: task.requestId, content: task.goal, whenBusy: 'reject' }, ctx);
+      : await conversation.submit({ type: 'input', requestId: admissionRequestId, content: task.goal, whenBusy: 'reject' }, ctx);
     await harness.commit(async (tx) => {
       const saved = (await tx.doc(Ledger)).tasks.find((item) => item.id === task.id)!;
       saved.submissionId = submission.id; saved.status = 'running'; saved.startedAt = new Date().toISOString();
@@ -429,7 +455,9 @@ export function createLocalAgent(directory: string, getInputs: (id: string, conv
     void submission.wait(ctx).then(async (settled) => {
       await harness.commit(async (tx) => {
         const saved = (await tx.doc(Ledger)).tasks.find((item) => item.id === task.id)!;
-        saved.status = settled.status === 'done' ? 'answered' : settled.reason === 'aborted' ? 'cancelled' : 'failed';
+        const requestFailed = settled.status !== 'done' && settled.reason === 'model_error';
+        saved.status = requestFailed ? 'paused' : settled.status === 'done' ? 'answered' : settled.reason === 'aborted' ? 'cancelled' : 'failed';
+        if (requestFailed) saved.pauseReason = `模型请求失败：${saved.modelBoundaryError || '有限重试耗尽或请求不兼容；已保存来源、用量与完成工具，等待明确恢复'}`;
         if (settled.status !== 'done') saved.error = settled.reason;
         saved.finishedAt = new Date().toISOString();
       }, ctx);
@@ -457,7 +485,7 @@ export function createLocalAgent(directory: string, getInputs: (id: string, conv
       }
       const submitted = await borrowKernel(task, async (kernel) => {
         const conversationId = task.isolatedExecution ? (await kernel.root(ctx)).id : Number(task.conversationId) as ConversationId;
-        return kernel.commit((tx) => tx.submissionByRequest(conversationId, task.requestId), ctx);
+        return kernel.commit((tx) => tx.submissionByRequest(conversationId, task.recoveryRequestId || task.requestId), ctx);
       });
       changes.push({ id: task.id, status: submitted?.status === 'done' ? 'answered' : 'paused',
         reason: task.status === 'pausing' ? '用户暂停；本机执行已停止' : '宿主中断或退出；等待明确恢复' });
@@ -475,6 +503,7 @@ export function createLocalAgent(directory: string, getInputs: (id: string, conv
           for (const execution of task.toolExecutions) if (execution.status === 'running') { execution.status = 'unknown'; execution.error = change.reason; }
         }
         if (change.status === 'paused') {
+          for (const request of task.modelRequests || []) if (request.status === 'running') { request.status = 'interrupted'; request.finishedAt = new Date().toISOString(); request.error = '宿主中断；响应或用量未完全确认，等待明确恢复'; }
           task.pauseReason = change.reason!;
           for (const execution of task.toolExecutions) if (execution.status === 'running') execution.status = 'paused';
         }
@@ -518,6 +547,10 @@ export function createLocalAgent(directory: string, getInputs: (id: string, conv
     if (task.status !== 'paused') return task;
     if (task.workflow === 'protein_factory_remote') return !task.remoteAttempts?.length || task.retryRemoteApproved === task.remoteAttempts.at(-1)?.id ? enqueue(task.id) : reconcileScience(taskId);
     if (task.workflow === 'simulated_external') return task.externalJob?.state === 'not_submitted' ? enqueue(task.id) : reconcileExternal(taskId);
+    if (task.pauseReason?.startsWith('模型请求失败')) {
+      await harness.commit(async (tx) => { (await tx.doc(Ledger)).tasks.find((item) => item.id === taskId)!.recoveryRequestId = `${task.requestId}:recovery:${randomUUID()}`; }, ctx);
+      return enqueue(task.id);
+    }
     const { conversationId, pending } = await borrowKernel(task, async (kernel) => ({
       conversationId: task.isolatedExecution ? (await kernel.root(ctx)).id : Number(task.conversationId) as ConversationId,
       pending: await kernel.inspect(ctx),

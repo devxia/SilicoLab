@@ -10,6 +10,11 @@
 .wb-model-settings form { display: grid; gap: 16px; padding-top: 18px; }
 .wb-model-settings label { display: grid; gap: 8px; font-size: 13px; }
 .wb-model-settings input, .wb-model-settings select, .wb-model-select select { border: 1px solid #ddd; border-radius: 7px; background: #fafafa; min-width: 0; padding: 10px 12px; font: inherit; }
+.wb-model-requests { padding: 10px 0; border-top: 1px solid #e1e1e1; margin: 12px 0; }
+.wb-model-requests h4 { font-size: 13px; margin: 0 0 9px; }
+.wb-model-requests details { margin: 6px 0; font-size: 12px; overflow-wrap: anywhere; }
+.wb-model-requests dl { display: grid; grid-template-columns: 110px 1fr; gap: 7px; }
+.wb-model-requests dd { margin: 0; color: #666; }
 .wb-model-select { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 10px; font-size: 12px; color: #666; }
 .wb-model-settings button:focus-visible, .wb-model-settings input:focus-visible, .wb-model-settings select:focus-visible, .wb-model-select select:focus-visible { outline: 2px solid #222; outline-offset: 2px; }
 @media (max-width: 700px) { .wb-model-settings { margin: 0; padding: 16px; } }

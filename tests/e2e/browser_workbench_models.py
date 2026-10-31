@@ -43,10 +43,17 @@ with tempfile.TemporaryDirectory(prefix='silicolab-model-ui-project-') as direct
         transcript = page.locator('.wb-transcript')
         expect(transcript.locator('.wb-task-card')).to_have_count(1 if protocol == 'openai-responses' else 2, timeout=15000)
         expect(transcript).to_contain_text('人工模型已核对工具结果', timeout=15000)
-        expect(transcript.locator('.wb-task-card').last).to_contain_text('实际字符数：3')
+        if protocol == 'openai-responses':
+            expect(transcript.locator('.wb-task-card').last).to_contain_text('实际字符数：3')
+        else:
+            expect(transcript.locator('.wb-task-card').first).to_contain_text('实际字符数：3')
         expect(transcript.locator('.wb-task-card').last).to_contain_text('模型已答复', timeout=15000)
+        tasks = page.request.get(project_url).json()['tasks']
+        assert len(tasks[0]['toolExecutions']) == 1
+        if protocol == 'anthropic-messages':
+            assert tasks[1]['toolExecutions'] == []
         count = page.request.get(URL + '/__test/model-endpoints').json()[protocol]['requests']
-        assert count == 3, {'protocol': protocol, 'requests': count, 'tasks': [(t['requestId'], t['status'], t.get('modelConfigurationId')) for t in page.request.get(project_url).json()['tasks']]}
+        assert count == (3 if protocol == 'openai-responses' else 2), {'protocol': protocol, 'requests': count}
         expect(page.get_by_label('当前对话模型', exact=True)).to_have_value(config['id'])
         expect(page.locator('body')).not_to_contain_text('artificial-ui-key-')
     page.reload(wait_until='domcontentloaded')

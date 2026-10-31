@@ -42,7 +42,8 @@ export function resolveModel(configurationId: string): Promise<ModelConfiguratio
 export function closeModels() { channel?.end(); }
 
 /** Only these protocol adapters dispatch; base URL never guesses a protocol. */
-export function configuredProvider(config: ModelConfiguration): Provider {
+export type RequestUsage = { input: number | null; output: number | null; cacheRead: number | null; cacheWrite: number | null };
+export function configuredProvider(config: ModelConfiguration, observeUsage?: (usage: Partial<RequestUsage>) => void): Provider {
   const providerId = `silicolab-${config.id}`;
   const api = config.protocol;
   const adapter = api === 'openai-responses' ? openAIResponsesApi() : api === 'anthropic-messages' ? anthropicMessagesApi() : undefined;
@@ -55,10 +56,14 @@ export function configuredProvider(config: ModelConfiguration): Provider {
     if (url.origin !== endpoint.origin || !(url.pathname === endpoint.pathname || url.pathname.startsWith(endpoint.pathname.replace(/\/$/, '') + '/'))) throw new Error('模型接收方与所选端点不符');
     return fetch(input, { ...options, redirect: 'error' });
   };
-  function failureMessage(value: unknown) {
+  function failureMessage(value: unknown, sawProtocolEvent: boolean) {
     const message = String(value);
     if (/401|403|authentication_error|invalid_api_key/i.test(message)) return '所选模型凭据无效（401/403）；请更新 API key，未自动切换接收方';
-    if (/stream ended before|terminal response|invalid json|unexpected token|parse|protocol/i.test(message)) return '所选端点协议不兼容或响应不完整；请核对协议，未自动切换接收方';
+    if (/429|rate_limit|too many requests/i.test(message)) return '模型限流（429）；未自动切换接收方';
+    if (/500|502|503|504|overloaded|service unavailable/i.test(message)) return '模型服务暂时不可用（503）；未自动切换接收方';
+    if (/stream ended before|terminal response|message_stop/i.test(message)) return sawProtocolEvent ? '模型断流：响应不完整；未自动切换接收方' : '所选端点协议不兼容；未自动切换接收方';
+    if (/terminated|socket|UND_ERR|timeout|timed out|ECONNRESET|ECONNREFUSED|connection error|fetch failed/i.test(message)) return '模型暂时网络错误；未自动切换接收方';
+    if (/invalid json|unexpected token|parse|protocol/i.test(message)) return '所选端点协议不兼容或响应不完整；请核对协议，未自动切换接收方';
     return '所选模型调用失败：网络不可用或协议不兼容；未自动切换接收方';
   }
   function clean(value: unknown): unknown {
@@ -70,14 +75,28 @@ export function configuredProvider(config: ModelConfiguration): Provider {
   function stream(method: 'stream' | 'streamSimple', requested: Model<Api>, context: TranscriptContext, options?: SimpleStreamOptions | ApiStreamOptions<Api>) {
     const output = createAssistantMessageEventStream();
     void (async () => {
+      let sawProtocolEvent = false;
       try {
-        const safeOptions = { ...options, fetch: safeFetch, maxRetries: 0, timeoutMs: 30000, transport: 'sse' as const, onProviderStreamEvent: undefined, onPayload: undefined, onResponse: undefined };
+        const onProviderStreamEvent = (event: unknown) => {
+          const raw = event as { type?: string; response?: { usage?: Record<string, unknown> }; message?: { usage?: Record<string, unknown> }; usage?: Record<string, unknown> };
+          if (raw.type === 'response.created' || raw.type === 'message_start') sawProtocolEvent = true;
+          const usage = raw.response?.usage || raw.message?.usage || raw.usage;
+          if (!usage) return;
+          const known: Partial<RequestUsage> = {};
+          for (const [field, source] of [['input', 'input_tokens'], ['output', 'output_tokens'], ['cacheRead', 'cache_read_input_tokens'], ['cacheWrite', 'cache_creation_input_tokens']] as const) {
+            if (typeof usage[source] === 'number') known[field] = usage[source] as number;
+          }
+          const details = usage.input_tokens_details as { cached_tokens?: number } | undefined;
+          if (typeof details?.cached_tokens === 'number') known.cacheRead = details.cached_tokens;
+          observeUsage?.(known);
+        };
+        const safeOptions = { ...options, fetch: safeFetch, maxRetries: 0, timeoutMs: 30000, transport: 'sse' as const, onProviderStreamEvent, onPayload: undefined, onResponse: undefined };
         const events = method === 'streamSimple'
           ? adapter!.streamSimple(requested, context, safeOptions as SimpleStreamOptions)
           : adapter!.stream(requested, context, safeOptions);
         for await (const event of events) {
           const sanitized = clean(event) as AssistantMessageEvent;
-          if (sanitized.type === 'error' && event.type === 'error') sanitized.error.errorMessage = failureMessage(event.error.errorMessage);
+          if (sanitized.type === 'error' && event.type === 'error') sanitized.error.errorMessage = failureMessage(event.error.errorMessage, sawProtocolEvent);
           output.push(sanitized);
         }
         output.end(clean(await events.result()) as Awaited<ReturnType<typeof events.result>>);

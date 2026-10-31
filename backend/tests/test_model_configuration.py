@@ -9,6 +9,7 @@ import unittest
 from fastapi.testclient import TestClient
 from silicolab.server import create_app
 from test_workbench_science import wait_task
+from test_workbench_recovery import wait_state
 
 
 class MemorySecrets:
@@ -23,9 +24,12 @@ class MemorySecrets:
 
 
 class FakeModelEndpoint:
-    def __init__(self, protocol, key, mode='normal'):
+    def __init__(self, protocol, key, mode='normal', tool_name='synthetic_count'):
+        self.tool_name = tool_name
         self.protocol, self.key, self.mode = protocol, key, mode
         self.requests = []
+        self.release = threading.Event()
+        self.entered = threading.Event()
         endpoint = self
         class Handler(BaseHTTPRequestHandler):
             def log_message(self, *_):
@@ -33,42 +37,75 @@ class FakeModelEndpoint:
             def do_POST(self):
                 data = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
                 endpoint.requests.append({'path': self.path, 'headers': dict(self.headers), 'body': data})
-                if mode == 'invalid_key':
+                current_mode = mode[min(len(endpoint.requests) - 1, len(mode) - 1)] if isinstance(mode, list) else mode
+                if current_mode == 'hold':
+                    endpoint.entered.set()
+                    endpoint.release.wait(6)
+                if current_mode in ('rate_limit', 'server_error'):
+                    self.send_response(429 if current_mode == 'rate_limit' else 503)
+                    self.send_header('Content-Type', 'application/json')
+                    self.end_headers()
+                    self.wfile.write(b'{"error":{"message":"temporary service error"}}')
+                    return
+                if current_mode == 'invalid_key':
                     self.send_response(401)
                     self.send_header('Content-Type', 'application/json')
                     self.end_headers()
                     self.wfile.write(json.dumps({'error': {'type': 'authentication_error', 'message': key}}).encode())
                     return
-                if mode == 'incompatible':
+                if current_mode == 'incompatible':
                     self.send_response(200)
                     self.send_header('Content-Type', 'text/event-stream')
                     self.end_headers()
                     self.wfile.write(b'data: {"type":"unrecognized_protocol"}\n\n')
                     return
                 returned_tool_result = any(item.get('type') == 'function_call_output' for item in data.get('input', []) if isinstance(item, dict)) or any(block.get('type') == 'tool_result' for item in data.get('messages', []) for block in item.get('content', []) if isinstance(block, dict))
-                arguments = {'text': 'ABC'}
-                if mode == 'echo_property_name':
+                if current_mode == 'duplicate_once':
+                    returned_tool_result = False
+                arguments = {'text': 'ABC'} if tool_name == 'synthetic_count' else {}
+                if current_mode in ('long_original', 'duplicate_changed'):
+                    arguments = {'text': 'P' * 160 + ('A' if current_mode == 'long_original' else 'B')}
+                    if current_mode == 'duplicate_changed':
+                        returned_tool_result = False
+                reply = 'L' * 1000001 if current_mode == 'large_reply' else '人工模型已核对工具结果'
+                if current_mode == 'large_reply':
+                    returned_tool_result = True
+                if current_mode == 'echo_property_name':
                     arguments[key] = {'nested-' + key: 'echo'}
                 if protocol == 'openai-responses':
                     response = {'id': 'resp_artificial', 'object': 'response', 'status': 'completed', 'output': [], 'usage': {'input_tokens': 4, 'output_tokens': 3, 'total_tokens': 7}}
                     if data.get('tools') and not returned_tool_result:
-                        item = {'id': 'fc_artificial', 'type': 'function_call', 'call_id': 'call_artificial', 'name': 'synthetic_count', 'arguments': json.dumps(arguments), 'status': 'completed'}
+                        item = {'id': 'fc_artificial', 'type': 'function_call', 'call_id': 'call_artificial', 'name': tool_name, 'arguments': json.dumps(arguments), 'status': 'completed'}
                     else:
-                        item = {'id': 'msg_artificial', 'type': 'message', 'role': 'assistant', 'status': 'completed', 'content': [{'type': 'output_text', 'text': '人工模型已核对工具结果', 'annotations': []}]}
+                        item = {'id': 'msg_artificial', 'type': 'message', 'role': 'assistant', 'status': 'completed', 'content': [{'type': 'output_text', 'text': reply, 'annotations': []}]}
                     response['output'] = [item]
                     events = [{'type': 'response.created', 'response': response}, {'type': 'response.output_item.added', 'output_index': 0, 'item': item}, {'type': 'response.output_item.done', 'output_index': 0, 'item': item}, {'type': 'response.completed', 'response': response}]
                 else:
                     tool = bool(data.get('tools')) and not returned_tool_result
-                    block = {'type': 'tool_use', 'id': 'toolu_artificial', 'name': 'synthetic_count', 'input': arguments} if tool else {'type': 'text', 'text': '人工模型已核对工具结果'}
+                    block = {'type': 'tool_use', 'id': 'toolu_artificial', 'name': tool_name, 'input': arguments} if tool else {'type': 'text', 'text': reply}
                     events = [{'type': 'message_start', 'message': {'id': 'msg_artificial', 'type': 'message', 'role': 'assistant', 'model': 'artificial-model', 'content': [], 'usage': {'input_tokens': 4, 'output_tokens': 0}, 'stop_reason': None, 'stop_sequence': None}}, {'type': 'content_block_start', 'index': 0, 'content_block': block}, {'type': 'content_block_stop', 'index': 0}, {'type': 'message_delta', 'delta': {'stop_reason': 'tool_use' if tool else 'end_turn', 'stop_sequence': None}, 'usage': {'output_tokens': 3}}, {'type': 'message_stop'}]
                     if tool:
                         events.insert(2, {'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'input_json_delta', 'partial_json': json.dumps(arguments)}})
+                if current_mode == 'no_usage':
+                    for event in events:
+                        if 'usage' in event:
+                            del event['usage']
+                        for field in ('response', 'message'):
+                            if field in event:
+                                event[field].pop('usage', None)
+                if current_mode in ('disconnect', 'socket_drop'):
+                    events = events[:1]
                 raw = ''.join('event: ' + event['type'] + '\ndata: ' + json.dumps(event) + '\n\n' for event in events).encode()
                 self.send_response(200)
                 self.send_header('Content-Type', 'text/event-stream')
-                self.send_header('Content-Length', str(len(raw)))
+                self.send_header('Content-Length', str(len(raw) + 1024 if current_mode == 'socket_drop' else len(raw)))
                 self.end_headers()
                 self.wfile.write(raw)
+                if current_mode == 'socket_drop':
+                    import socket
+                    self.wfile.flush()
+                    self.connection.shutdown(socket.SHUT_RDWR)
+                    self.close_connection = True
         self.server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
@@ -76,6 +113,7 @@ class FakeModelEndpoint:
     def __enter__(self):
         return self
     def __exit__(self, *_):
+        self.release.set()
         self.server.shutdown()
         self.server.server_close()
         self.thread.join(timeout=5)
@@ -180,7 +218,7 @@ class ModelConfigurationTests(unittest.TestCase):
                         chat = client.post(url + '/conversations', json={'title': 'errors'}).json()['id']
                         client.put(url + f'/conversations/{chat}/model', json={'configurationId': config['id']})
                         task = client.post(url + '/tasks', json={'conversationId': chat, 'requestId': 'error-path', 'goal': '人工错误路径', 'authorizedTools': ['synthetic_count']}).json()
-                        done = wait_task(client, url, chat, task['id'])
+                        done = wait_state(client, url + f'/conversations/{chat}', lambda s: s['tasks'][0]['status'] == 'paused')['tasks'][0]
                         self.assertEqual(done['toolExecutions'], [])
                         state = client.get(url + f'/conversations/{chat}').text
                         self.assertNotIn(sentinel, state)

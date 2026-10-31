@@ -6,6 +6,7 @@ from pathlib import Path
 import sys
 import unittest
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from execution import PythonProbe
 
 
@@ -20,7 +21,7 @@ def main():
     if not result.wasSuccessful():
         return 1
     print(json.dumps({
-        "scope": "issue-3-local-macos-single-process-python-probe",
+        "scope": "issue-3-macos-single-process-python-boundary",
         "result": "passed",
         "tests": result.testsRun,
         "environment": environment,
@@ -31,7 +32,7 @@ def main():
             "Deprecated sandbox-exec, only the current local macOS/Python combination was exercised.",
             "Fork/spawn is denied, Python-only re-exec retains policy; multiprocessing is unsupported.",
             "No real credentials, external network requests, model/science providers or application integration.",
-            "No signed/notarized app, crash-supervisor, hostile-kernel, remote-volume or availability proof.",
+            "This verifier alone does not prove distribution, crash-supervisor, hostile-kernel or remote-volume guarantees.",
             "Read-only OS/stdlib runtime resources, bounded metadata, stdout/stderr and selected inputs are necessary exceptions.",
         ],
     }, indent=2))

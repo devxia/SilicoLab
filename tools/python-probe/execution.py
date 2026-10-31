@@ -90,22 +90,22 @@ class PythonProbe:
         script.write_text(code, encoding="utf-8")
         executable = Path(sys.executable).resolve(strict=True)
         stdlib = Path(sysconfig.get_path("stdlib")).resolve(strict=True)
-        read_paths = [f"(subpath {json.dumps(str(path))})" for path in
+        read_paths = [f"(subpath {json.dumps(str(path), ensure_ascii=False)})" for path in
                       [stdlib, self._packages, input_directory, output_directory, Path("/System/Library"), Path("/usr/lib")]]
         # The root directory itself is needed by dyld; this is not a recursive grant.
-        read_paths += [f"(literal {json.dumps(str(path))})" for path in
+        read_paths += [f"(literal {json.dumps(str(path), ensure_ascii=False)})" for path in
                        [Path("/"), executable, script, Path("/dev/null"), Path("/dev/urandom")]]
         ffi = Path(sys.base_prefix) / "lib" / "libffi.8.dylib"
         if ffi.exists():
-            read_paths.append(f"(literal {json.dumps(str(ffi.resolve()))})")
+            read_paths.append(f"(literal {json.dumps(str(ffi.resolve()), ensure_ascii=False)})")
         profile = "\n".join([
             "(version 1)", "(deny default)",
-            f"(allow process-exec (literal {json.dumps(str(executable))}))",
+            f"(allow process-exec (literal {json.dumps(str(executable), ensure_ascii=False)}))",
             "(allow file-read* " + " ".join(read_paths) + ")",
             "(allow file-read-metadata)",
             '(allow sysctl-read (sysctl-name "kern.ostype" "kern.osrelease" "kern.osversion" "kern.version" "kern.hostname" "hw.machine"))',
-            f"(deny file-read* (subpath {json.dumps(str(stdlib / 'site-packages'))}))",
-            f"(allow file-write* (subpath {json.dumps(str(output_directory))}))",
+            f"(deny file-read* (subpath {json.dumps(str(stdlib / 'site-packages'), ensure_ascii=False)}))",
+            f"(allow file-write* (subpath {json.dumps(str(output_directory), ensure_ascii=False)}))",
             # No process-fork, network, Mach lookup, signal, file-link or shell grants.
         ])
         (task / "profile.sb").write_text(profile, encoding="utf-8")

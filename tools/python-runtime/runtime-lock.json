@@ -1,0 +1,21 @@
+{
+  "platform": "macos-x86_64",
+  "python": {
+    "version": "3.13.18",
+    "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20261026/cpython-3.13.18%2B20261026-x86_64-apple-darwin-install_only.tar.gz",
+    "sha256": "708be9e7df297f68bdae589ea9e62a621db5abe7708f79e851c41410347452d1",
+    "license_source": "https://github.com/astral-sh/python-build-standalone/releases/tag/20261026"
+  },
+  "wheels": [
+    {
+      "name": "openpyxl", "version": "3.1.5", "module": "openpyxl",
+      "url": "https://files.pythonhosted.org/packages/c0/da/977ded879c29cbd04de313843e76868e6e13408a94ed6b987245dc7c8506/openpyxl-3.1.5-py2.py3-none-any.whl",
+      "sha256": "5282c12b107bffeef825f4617dc029afaf41d0ea60823bbb665ef3079dc79de2"
+    },
+    {
+      "name": "et-xmlfile", "version": "2.0.0", "module": "et_xmlfile",
+      "url": "https://files.pythonhosted.org/packages/c1/8b/5fe2cc11fee489817272089c4203e679c63b570a5aaeb18d852ae3cbba6a/et_xmlfile-2.0.0-py3-none-any.whl",
+      "sha256": "7a91720bc756843502c3b7504c77b8fe44217c85c537d85037f0f536151b2caa"
+    }
+  ]
+}

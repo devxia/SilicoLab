@@ -224,6 +224,14 @@ npm --prefix tools/runtime-probe run verify
 
 需由宿主预装工具目录 requirements 中的固定库版本；实验不自行安装依赖、不继承模型认证、不联网外部服务，也不依赖调研目录。`sandbox-exec` 已被 Apple 弃用，本机通过不等于已完成签名、公证、随包 Python 和其他系统兼容；生产生成代码执行仍受分发验收门槛约束。全部临时输入、策略、日志和产物在系统临时目录，必要源码、人工测试及说明保留。
 
+## 独立 Python 运行时分发证据
+
+[#3 分发跟进](../tools/python-runtime/README.md)从公开hash-pinned CPython与预装wheel构建ad-hoc Hardened Runtime probe app/ZIP；删除builder后在中文/空格/引号路径实际重跑16项目录/原件/凭据/网络/安装/进程边界。此处不代表Developer ID、公证、Gatekeeper、最终产品包或#16应用执行链已验收。
+
+```bash
+python3 -B tools/python-runtime/verify_distribution.py
+```
+
 ## 浏览器流程
 
 使用 Playwright 和本机 Chrome；夹具仅监听 8766，使用临时数据库。每组测试启动一个全新的夹具，在另一个终端运行对应脚本，完成后停止夹具。

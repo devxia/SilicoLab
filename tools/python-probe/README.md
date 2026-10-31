@@ -1,6 +1,6 @@
 # 受限 Python 的 macOS 边界实验（Issue #3）
 
-对应 [Issue #3](https://github.com/devxia/SilicoLab/issues/3) 与 [首版规格 #1](https://github.com/devxia/SilicoLab/issues/1)。这是独立工程验证，**未接入正式应用或 pi-durable，不开放产品中的生成代码执行**。所有输入、凭据与监听端均为临时人工夹具；不读取真实认证文件，不向外部服务发送数据。
+对应 [Issue #3](https://github.com/devxia/SilicoLab/issues/3) 与 [首版规格 #1](https://github.com/devxia/SilicoLab/issues/1)。这是独立工程验证，**尚未接入正式应用的生成代码链路**。本票补充的[独立运行时分发验证](../python-runtime/README.md)构建含自带CPython/预装库的ad-hoc Hardened Runtime签名ZIP，删除构建目录后从含Unicode/空格/引号的安装目录重跑16项通过；不代表Developer ID、公证、Gatekeeper或最终产品包验收。所有输入、凭据与监听端均为临时人工夹具；不读取真实认证文件，不向外部服务发送数据。
 
 ## 可复现入口
 
@@ -55,11 +55,11 @@
 
 ## 兼容性、分发与阻断条件
 
-本实验取得了本机内核拒绝证据，可以支撑继续设计受限执行适配；**生产生成代码交付仍需分发验证后才能开放**。
+本实验取得了本机内核拒绝证据，并以独立随包CPython 3.13.18取得当前macOS 15.7.7 x86_64手动ZIP/CLI分发运行证据，可以支撑 #16 接入设计；**正式应用仍需接入并验证受管执行后才能开放生成代码**。分发构建/哈希/签名及独立解包入口见 [python-runtime](../python-runtime/README.md)。
 
 - `sandbox-exec` 的本机 man page 和 SDK `sandbox.h` 均明确标为 **DEPRECATED**，Apple 推荐应用使用 App Sandbox。Seatbelt profile 语言也不是稳定的跨版本接口；系统升级可能改变可用性。不能把命令存在或本机通过当作长期分发保证。
-- 目前使用宿主已装 CPython，只把固定纯 Python 库 materialize 到临时目录，没有构建/签名/公证随包 Python。正式 runtime 必须独立、只读、可追溯，不含宿主凭据/可变资料；当前代码不能直接复制成正式产品执行器。
-- 正式 .app 在签名、公证、Hardened Runtime、目标 CPU、沙箱权限及不含开发机目录的环境中，都必须重跑允许/拒绝/停止实验。当前既有 app 的 Python/Node 打包不算本实验已验证分发。
+- 初始实验使用宿主已装CPython；新增独立分发路线使用公开固定哈希的python-build-standalone CPython 3.13.18与固定openpyxl/et-xmlfile wheel，不含开发机环境或凭据。Mach-O及app以ad-hoc Hardened Runtime签名、深度校验，ZIP解包后独立运行16项通过。没有Developer ID、公证或Gatekeeper认可证据；其他系统/CPU及最终应用集成仍未验，不能据此宣称任意安装方式已兼容。
+- 正式 .app 的Developer ID/公证、目标CPU、沙箱权限及正式集成仍须按#25重跑允许/拒绝/停止实验；本票验证的是独立probe app的ad-hoc Hardened Runtime签名分发路径，不把既有产品app打包当作全部边界已验证。
 - **缺少 sandbox、依赖版本不符、可信运行时无法按最小权限启动，均阻断执行**。不通过放开网络、扩大任意文件读取、允许 shell 或回退未隔离进程来补救。需要改变权限时须明确决定并重新验证。
 - 禁止 fork 的策略有意不支持 multiprocessing、启动外部科学程序或其他可派生进程库；当前只验证单进程 statistics/openpyxl。未来需要进程树时另建经过验证的监督机制，不能仅 killpg 或声称自动继承本项结果。
 - 正常 stop/close/timeout 已验，宿主 SIGKILL/系统重启后的自动回收和恢复、崩溃监督器、所有存储故障、线程/内存洪泛与内核漏洞未验。沙箱不是防御被攻陷内核的安全虚拟机。

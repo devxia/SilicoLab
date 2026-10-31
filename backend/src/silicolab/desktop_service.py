@@ -35,7 +35,7 @@ def main(argv=None):
     workbench = create_app(directory / DATABASE_FILENAME, skill_roots=[] if args.isolated_resources else None, mcp_roots=[] if args.isolated_resources else None)
     app = FastAPI(lifespan=workbench.router.lifespan_context)
     server = uvicorn.Server(uvicorn.Config(app, loop='asyncio', http='h11', ws='none', log_config=None, access_log=False, timeout_graceful_shutdown=2))
-    state = {'app': SERVICE_ID, 'pid': os.getpid(), 'serviceId': identity, 'port': port}
+    state = {'app': SERVICE_ID, 'pid': os.getpid(), 'serviceId': identity, 'port': port, 'isolatedResources': args.isolated_resources}
 
     @app.get('/api/desktop/status')
     def status():

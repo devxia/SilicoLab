@@ -140,6 +140,13 @@ async function dispatch(request: Record<string, unknown>) {
       const options: ScienceOptions = { workflow: request.workflow === 'd2p_local' ? 'd2p_local' : request.workflow === 'simulated_external' ? 'simulated_external' : request.workflow === 'protein_factory_remote' ? 'protein_factory_remote' : request.workflow === 'python_analysis' ? 'python_analysis' : request.workflow === 'mcp_tool' ? 'mcp_tool' : 'validation' };
       if (request.workflow && !['validation', 'd2p_local', 'simulated_external', 'protein_factory_remote', 'python_analysis', 'mcp_tool'].includes(String(request.workflow))) throw new Error('未知任务模式');
       options.executionContract=process.env.SILICOLAB_EXECUTION_CONTRACT;
+      if (request.acceptanceModel !== undefined) {
+        const guard=request.acceptanceModel as Record<string,unknown>;
+        if (!guard || Object.keys(guard).sort().join(',')!=='baseUrl,id,modelId,protocol' || !['id','baseUrl','modelId','protocol'].every(k=>typeof guard[k]==='string' && String(guard[k]).length>0) || !['openai-responses','anthropic-messages'].includes(String(guard.protocol))) throw new Error('验收模型期望格式不合法');
+        const endpoint=new URL(String(guard.baseUrl));
+        if (endpoint.username || endpoint.password || endpoint.search || endpoint.hash || !['https:','http:'].includes(endpoint.protocol)) throw new Error('验收端点不能包含认证、查询或片段');
+        options.acceptanceModel={id:String(guard.id),protocol:guard.protocol as 'openai-responses' | 'anthropic-messages',baseUrl:String(guard.baseUrl),modelId:String(guard.modelId)};
+      }
       if (request.workflow === 'd2p_local') {
         const parameters = request.parameters as Record<string, unknown> | undefined;
         if (!parameters || !['preserve', 'add', 'ask'].includes(String(parameters.stopPolicy)) || typeof parameters.avoid !== 'string' || parameters.avoid.length > 2000 || typeof request.inputVersionId !== 'string') throw new Error('本地专项参数不完整');

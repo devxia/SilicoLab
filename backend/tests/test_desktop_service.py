@@ -69,6 +69,8 @@ class DesktopServiceTests(unittest.TestCase):
                 self.assertEqual(ensure_service(root, isolated_resources=True)['serviceId'], info['serviceId'])
                 with urlopen(info['origin'] + '/api/health') as response:
                     self.assertEqual(json.load(response)['pid'], info['pid'])
+                with urlopen(info['origin'] + '/api/desktop/status') as response:
+                    self.assertIs(json.load(response).get('isolatedResources'),True)
                 with self.assertRaises(HTTPError) as denied:
                     urlopen(Request(info['origin'] + '/api/desktop/quit', data=b'{}', headers={'Authorization': 'Bearer artificial-wrong'}))
                 self.assertEqual(denied.exception.code, 403)

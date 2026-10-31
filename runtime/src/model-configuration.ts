@@ -102,12 +102,26 @@ export function configuredProvider(config: ModelConfiguration, observeUsage?: (u
         const events = method === 'streamSimple'
           ? adapter!.streamSimple(requested, context, safeOptions as SimpleStreamOptions)
           : adapter!.stream(requested, context, safeOptions);
+        let terminal: Awaited<ReturnType<typeof events.result>> | undefined;
         for await (const event of events) {
           const sanitized = clean(event) as AssistantMessageEvent;
-          if (sanitized.type === 'error' && event.type === 'error') sanitized.error.errorMessage = failureMessage(event.error.errorMessage, sawProtocolEvent, httpStatus);
+          if (sanitized.type === 'error' && event.type === 'error') {
+            sanitized.error.errorMessage = failureMessage(event.error.errorMessage, sawProtocolEvent, httpStatus);
+            terminal=sanitized.error;
+          }
+          if (sanitized.type === 'done') {
+            const useful=sanitized.message.content.some(block=>block.type==='toolCall' || (block.type==='text' && block.text.trim().length>0));
+            if (!useful) {
+              terminal={...sanitized.message,stopReason:'error',errorMessage:'所选端点返回空响应，未取得回答或工具调用；请核对协议和模型，未自动切换接收方'};
+              output.push({type:'error',reason:'error',error:terminal});
+              continue;
+            }
+            terminal=sanitized.message;
+          }
           output.push(sanitized);
         }
-        output.end(clean(await events.result()) as Awaited<ReturnType<typeof events.result>>);
+        const final=clean(await events.result()) as Awaited<ReturnType<typeof events.result>>;
+        output.end(terminal || final);
       } catch {
         const error = { role: 'assistant' as const, content: [], api, provider: providerId, model: config.modelId,
           usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },

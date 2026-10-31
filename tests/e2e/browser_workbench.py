@@ -49,7 +49,8 @@ with tempfile.TemporaryDirectory(prefix='silicolab-ui-project-') as directory, s
     page.get_by_role('button', name='查看结果', exact=True).click()
     expect(page.get_by_role('tabpanel').locator('dd').first).to_contain_text(directory)
     page.screenshot(path=str(OUT / 'desktop.png'), full_page=True)
-    page.reload(wait_until='networkidle')
+    # Restored conversations keep SSE open; readiness is the persisted UI below.
+    page.reload(wait_until='domcontentloaded')
     page.get_by_role('button', name='打开项目 人工研究', exact=True).click()
     expect(draft).to_have_value('打开分析区也要保留这个草稿')
     response = page.request.get(URL + '/api/workbench/projects')

@@ -76,6 +76,8 @@ class FakeModelEndpoint:
                 reply = 'L' * 1000001 if current_mode == 'large_reply' else '人工模型已核对工具结果'
                 if current_mode == 'large_reply':
                     returned_tool_result = True
+                if current_mode == 'empty_reply':
+                    returned_tool_result=True;reply=''
                 if current_mode == 'echo_property_name':
                     arguments[key] = {'nested-' + key: 'echo'}
                 if protocol == 'openai-responses':
@@ -164,6 +166,21 @@ class ModelConfigurationTests(unittest.TestCase):
                 for path in project_path.rglob('*'):
                     if path.is_file():
                         self.assertNotIn(sentinel.encode(), path.read_bytes(), str(path))
+
+    def test_empty_protocol_completion_is_not_a_successful_answer(self):
+        for protocol in ('openai-responses','anthropic-messages'):
+            with self.subTest(protocol=protocol),tempfile.TemporaryDirectory() as directory,FakeModelEndpoint(protocol,'artificial-empty','empty_reply') as endpoint:
+                root=Path(directory);(root/'project').mkdir()
+                with TestClient(create_app(root/'app.sqlite3',delay=0,credential_store=MemorySecrets())) as client:
+                    config=client.post('/api/workbench/model-configs',json={'name':'empty response','protocol':protocol,'baseUrl':endpoint.url,'modelId':'artificial-model','apiKey':endpoint.key}).json()
+                    project=client.post('/api/workbench/projects',json={'path':str(root/'project')}).json();url='/api/workbench/projects/'+project['id']
+                    chat=client.post(url+'/conversations',json={'title':'empty completion'}).json()['id']
+                    client.put(url+'/conversations/'+chat+'/model',json={'configurationId':config['id']})
+                    client.post(url+'/tasks',json={'conversationId':chat,'requestId':'empty','goal':'人工完成验证','authorizedTools':['synthetic_count']})
+                    task=wait_state(client,url+'/conversations/'+chat,lambda s:s['tasks'][0]['status'] in ('answered','paused','failed'))['tasks'][0]
+                    self.assertEqual(task['status'],'paused');self.assertEqual(task['modelRequests'][0]['status'],'error')
+                    self.assertIn('空响应',task['modelRequests'][0]['error'])
+                    self.assertEqual(len(endpoint.requests),1);self.assertEqual(task['toolExecutions'],[])
 
     def test_echoed_secret_property_names_never_reach_checkpoint_or_next_prompt(self):
         for protocol in ('openai-responses', 'anthropic-messages'):

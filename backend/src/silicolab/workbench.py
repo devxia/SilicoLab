@@ -47,7 +47,17 @@ class SimulationInput(BaseModel):
     responseMode: Literal['normal', 'lost', 'hold_after_accept'] = 'normal'
 
 
+class AcceptanceModel(BaseModel):
+    # Opt-in verification expectation, never an ordinary task's model selection.
+    model_config = {'extra':'forbid'}
+    id: str = Field(min_length=1,max_length=100)
+    protocol: Literal['openai-responses','anthropic-messages']
+    baseUrl: str = Field(min_length=1,max_length=2000)
+    modelId: str = Field(min_length=1,max_length=200)
+
+
 class TaskInput(BaseModel):
+    acceptanceModel: AcceptanceModel | None = None
     conversationId: str = Field(min_length=1, max_length=100)
     requestId: str = Field(min_length=1, max_length=200)
     goal: str = Field(min_length=1, max_length=100000)

@@ -71,6 +71,26 @@ class RestrictedAnalysisTests(unittest.TestCase):
                 self.assertEqual((root/'project'/source['path']).read_bytes(),b'value\n1\n2\n6\n')
                 self.assertEqual(client.get('/api/jobs').json(),[])
 
+    def test_model_receives_verified_numeric_summary_and_artifact_references_on_fresh_and_reused_tool(self):
+        with tempfile.TemporaryDirectory() as directory,FakeModelEndpoint('openai-responses','artificial-summary',mode=['normal','duplicate_once','normal'],tool_name='python_analysis',tool_arguments={'code':SCRIPT}) as model:
+            root=Path(directory)
+            with TestClient(create_app(root/'app.sqlite3',delay=0,credential_store=MemorySecrets())) as client:
+                url,chat,identity,_,_,_=self.setup(client,root,model)
+                task=wait_task(client,url,chat,identity)
+                self.assertEqual(len(task['toolExecutions']),1,'same completed script must be reused')
+                expected={a['name']:a for a in task['toolExecutions'][0]['artifacts']}
+                self.assertEqual(len(model.requests),3)
+                for request in model.requests[1:]:
+                    tool_results=[json.loads(item['output']) for item in request['body']['input'] if item.get('type')=='function_call_output']
+                    for result in tool_results:
+                        self.assertEqual(result.get('summary'),{'count':3,'sum':9,'mean':3})
+                        self.assertTrue(result.get('independentlyVerified'))
+                        refs={a['name']:a for a in result['artifacts']}
+                        self.assertEqual(set(refs),{'analysis.py','summary.json','summary.xlsx'})
+                        for name,ref in refs.items():
+                            self.assertEqual(ref['sha256'],expected[name]['sha256']);self.assertNotIn('path',ref)
+                        self.assertNotIn(SCRIPT,json.dumps(result))
+
     def test_supervisor_rejects_small_workbook_with_oversized_dimensions_before_unbounded_parse(self):
         # Each adversarial file is tiny; preflight must reject coordinates before parsing rows.
         for dimension,row in [('A1:XFD3',3),('A1:C100',100),('A1:XFD10000',10000),('A1:C1000000000',1000000000),('A1:C2',1000000000)]:

@@ -25,6 +25,16 @@ const Ledger = defineDoc<{ tasks: ResearchTask[]; modelRequests: number; queue?:
 });
 type FixedInputs = Awaited<ReturnType<ProjectFiles['fixed']>>;
 
+function modelToolSummary(tool: string, result: ExecutionResult, artifacts: Artifact[] = []) {
+  if (tool==='python_analysis' && 'records' in result) {
+    const verified=result.status==='completed' && result.checks?.independent_numeric_summary===true;
+    return {status:result.status, independentlyVerified:verified,
+      ...(verified && result.summary ? {summary:{count:result.summary.count,sum:result.summary.sum,mean:result.summary.mean}} : {}),
+      artifacts:artifacts.filter(a=>['analysis.py','summary.json','summary.xlsx'].includes(a.name || '')).map(a=>({name:a.name,sha256:a.sha256,size:a.size}))};
+  }
+  return 'records' in result ? {status:result.status,records:result.records.length} : result;
+}
+
 /** Model adapter and controlled tools. Only pi-durable owns the agent loop. */
 export function createLocalAgent(directory: string, getInputs: (id: string, conversationId: string) => Promise<FixedInputs>, getModelSelection: (conversationId: string) => Promise<string | undefined>, skills: SkillCatalog) {
   let harness: Harness;
@@ -75,6 +85,12 @@ export function createLocalAgent(directory: string, getInputs: (id: string, conv
     if (!task) throw new Error('请求未关联当前任务');
     const id = await getModelSelection(task.conversationId);
     const configuration = id ? await resolveModel(id) : null;
+    const expected=task.acceptanceModel;
+    if (expected && (!configuration || expected.id!==configuration.id || expected.protocol!==configuration.protocol || expected.baseUrl!==configuration.baseUrl || expected.modelId!==configuration.modelId)) {
+      const reason='验收接收方与本次明确期望不符；请求尚未发送，请停止本轮并重新确认计划';
+      await harness.commit(async tx=>{(await tx.doc(Ledger)).tasks.find(item=>item.id===task.id)!.modelBoundaryError=reason;},ctx);
+      throw new RequestBoundaryError(reason);
+    }
     const history: TranscriptContext['messages'][number][] = [];
     for (const prior of (await tasks()).filter((item) => item.conversationId === task.conversationId && item.id !== task.id && item.createdAt <= task.createdAt && item.submissionId !== undefined)) {
       await borrowKernel(prior, async (kernel) => {
@@ -120,7 +136,7 @@ export function createLocalAgent(directory: string, getInputs: (id: string, conv
     const completed = task.toolExecutions.find((execution) => execution.status === 'completed' && execution.tool === tool && (execution.toolTaskId === api.taskId || execution.inputFingerprint === inputFingerprint));
     if (completed?.result) {
       await verifyCompleted(completed, '完成步骤产物完整性不符，需先核对');
-      const summary = 'records' in completed.result ? { status: completed.result.status, records: completed.result.records.length } : completed.result;
+      const summary = modelToolSummary(tool,completed.result,completed.artifacts);
       return { isError: false, output: [{ type: 'text' as const, text: JSON.stringify(summary) }], details: { result: completed.result, reused: true } };
     }
     const id = randomUUID();
@@ -146,7 +162,7 @@ export function createLocalAgent(directory: string, getInputs: (id: string, conv
         if (outcome.artifacts) execution.artifacts = outcome.artifacts;
       }, context);
       // Only bounded summary goes to the model. Full scientific records remain task evidence.
-      const summary = 'records' in outcome.result ? { status: outcome.result.status, records: outcome.result.records.length } : outcome.result;
+      const summary = modelToolSummary(tool,outcome.result,outcome.artifacts);
       return { isError: outcome.isError || false, output: [{ type: 'text' as const, text: JSON.stringify(summary) }], details: { result: outcome.result, reused: false } };
     } catch (error) {
       if (!context.abortSignal?.aborted) await harness.commit(async (tx) => {
@@ -267,7 +283,7 @@ export function createLocalAgent(directory: string, getInputs: (id: string, conv
     if (existing) {
       const admitted = existing.admission || { authorizedTools: existing.authorizedTools, options: { workflow: existing.workflow, parameters: existing.parameters, inputVersionId: existing.inputVersionId, specialtyAcknowledged: existing.specialtyAcknowledged } };
       const original = admitted.options;
-      if (existing.goal !== goal || JSON.stringify(admitted.authorizedTools) !== JSON.stringify(authorizedTools) || JSON.stringify(original.parameters) !== JSON.stringify(options.parameters) || original.inputVersionId !== options.inputVersionId || (original.workflow || 'validation') !== (options.workflow || 'validation') || Boolean(original.specialtyAcknowledged) !== Boolean(options.specialtyAcknowledged) || JSON.stringify(original.simulation) !== JSON.stringify(options.simulation) || JSON.stringify(original.mcp) !== JSON.stringify(options.mcp) || original.mcpTool !== options.mcpTool || JSON.stringify(original.mcpArguments)!==JSON.stringify(options.mcpArguments)) throw new Error('请求身份已用于不同目标、输入或权限');
+      if (existing.goal !== goal || JSON.stringify(admitted.authorizedTools) !== JSON.stringify(authorizedTools) || JSON.stringify(original.parameters) !== JSON.stringify(options.parameters) || original.inputVersionId !== options.inputVersionId || (original.workflow || 'validation') !== (options.workflow || 'validation') || Boolean(original.specialtyAcknowledged) !== Boolean(options.specialtyAcknowledged) || JSON.stringify(original.simulation) !== JSON.stringify(options.simulation) || JSON.stringify(original.mcp) !== JSON.stringify(options.mcp) || original.mcpTool !== options.mcpTool || JSON.stringify(original.mcpArguments)!==JSON.stringify(options.mcpArguments) || JSON.stringify(original.acceptanceModel)!==JSON.stringify(options.acceptanceModel)) throw new Error('请求身份已用于不同目标、输入或权限');
       return existing;
     }
     if (stopping) throw new Error('项目正在关闭');

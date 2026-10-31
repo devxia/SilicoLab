@@ -58,6 +58,8 @@ model-configs-*.tmp
 .mcp.json
 mcp-trust.json
 mcp-trust.json.*.tmp
+notification-state.json
+notification-state.json.*.tmp
 # Native owner/control descriptors include local authorization tokens
 background.json
 background.lock

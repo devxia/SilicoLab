@@ -228,6 +228,18 @@ stdio须显式预装已验证runtime，不能将#3Python结果自动推给任意
 
 人工旧版夹具需固定公开提交c6052b4、离线npm缓存及预装分析runtime；仅重开旧记录不构成任意旧版继续执行的许可。
 
+## 必要决定系统提醒
+
+[#24 通知契约](decision-notifications.md) 由独立桌面后台观察真实持久决定，用户启用后通过随包Swift helper发macOS通知；固定摘要不含科研全文，点击重核原身份再定位。默认关闭/系统拒绝仍可在原任务答复，不自动执行。
+
+```bash
+python3 -B tools/macos-notifications/build.py
+.venv/bin/python -B -m unittest discover -s backend/tests -p test_decision_notifications.py -v
+.venv/bin/python -B tests/e2e/browser_workbench_notifications.py
+```
+
+真实通知与点击脚本须另有用户同意和系统权限；不能以浏览器或fake center通过充作系统投递证据。
+
 ## 常规检查
 
 ```bash

@@ -290,6 +290,7 @@ class Workbench:
         self._path_lines = {}
         self._opening = set()
         self._simulated = None
+        self.notifications = None
         try:
             self._projects = json.loads(self.index.read_text())
             if not isinstance(self._projects, list) or any(
@@ -439,6 +440,20 @@ class Workbench:
                     return next(task for task in snapshot['tasks'] if task['id'] == values['taskId'])
                 return {**result, 'path': item['path'], 'availability': {'status': 'online', 'progressSaved': True}} if op == 'status' else result
 
+    def notification_snapshots(self):
+        # Notifications observe already-owned projects only, never consume the
+        # bounded host pool by silently opening every persisted project index.
+        with self._lock:
+            active=[dict(p) for p in self._projects if p['path'] in self._hosts and self._hosts[p['path']].alive()]
+        snapshots=[]
+        for item in active:
+            with self._project_line(item['id']),self._path_line(item['path']):
+                with self._lock:host=self._hosts.get(item['path'])
+                if host and host.alive() and host.available():
+                    try:snapshots.append(host.call('status'))
+                    except (OSError,ValueError):pass
+        return snapshots
+
     def backup(self,project_id,path,upgrade=False):
         from silicolab.project_archives import create_archive,check_format,write_format
         with self._project_line(project_id):
@@ -525,6 +540,22 @@ def router(workbench):
             return action(*args, **kwargs)
         except (OSError, ValueError, subprocess.SubprocessError) as error:
             raise HTTPException(409, str(error)) from error
+
+    def notifications():
+        if workbench.notifications is None:raise ValueError('系统提醒仅在独立桌面后台可用；应用待处理项不受影响')
+        return workbench.notifications
+
+    @routes.get('/notifications')
+    def notification_status():return invoke(lambda:notifications().status())
+
+    @routes.post('/notifications')
+    def configure_notifications(values:dict):return invoke(lambda:notifications().configure(values.get('enabled')))
+
+    @routes.post('/notifications/selection')
+    def notification_selection():return invoke(lambda:notifications().consume())
+
+    @routes.post('/notifications/selection/ack')
+    def acknowledge_notification(values:dict):return invoke(lambda:notifications().acknowledge(values))
 
     @routes.get('/projects')
     def projects():

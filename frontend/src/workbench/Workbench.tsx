@@ -17,6 +17,7 @@ import RecoveryItems from './RecoveryItems';
 import DesktopLifecycle from './DesktopLifecycle';
 import McpResources from './McpResources';
 import ProjectArchives from './ProjectArchives';
+import DecisionNotifications from './DecisionNotifications';
 import SkillResources from './SkillResources';
 import ModelSettings, { type ModelConfiguration } from './ModelSettings';
 
@@ -230,6 +231,22 @@ export default function Workbench() {
     <main className="wb-main">
       <header className="wb-header"><div><FolderOpen size={16} /><span>{project?.name || '选择一个科研项目'}</span><span className="wb-header-chat">/　{chat?.title || '对话'}</span></div><div>{(['文件', '任务', '结果'] as WorkspaceTab[]).map((item, index) => <button key={item} aria-label={`查看${item}`} aria-pressed={tab === item} onClick={() => analysis(item)}>{index === 0 ? <Files size={18} /> : index === 1 ? <ListChecks size={18} /> : <FileOutput size={18} />}</button>)}</div></header>
       <DesktopLifecycle />
+      <DecisionNotifications onSelect={async target=>{
+        if(busy)return false;
+        let positioned=false;
+        await perform(async()=>{
+        if(!offline)await saveDraft();
+        const next=await request<Project>(`/projects/${target.projectId}`);
+        const original=next.conversations.find(chat=>chat.id===target.conversationId);
+        const task=next.tasks.find(task=>task.id===target.taskId&&task.conversationId===target.conversationId);
+        const decision=task?.decisions?.find(d=>d.id===target.decisionId);
+        if(!original||!task||!decision)throw new Error('原决定不可访问，未定位替代任务');
+        if(decision.status!=='pending'){setError('原决定已处理，已清除这次过期通知定位；未执行任务');positioned=true;return;}
+        setSettings(false);setResources(false);setMcpResources(false);setArchives(false);
+        setProject(next);selectChat(original,next.id);setTaskTarget({projectId:next.id,conversationId:original.id,taskId:task.id});positioned=true;
+        });
+        return positioned;
+      }}/>
       {archiveNotice&&<p role="status">{archiveNotice}</p>}
       {project && <RecoveryItems project={project} onSelect={(id, taskId) => perform(async () => {
         if (!offline) await saveDraft();

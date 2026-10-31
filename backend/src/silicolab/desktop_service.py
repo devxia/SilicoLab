@@ -52,12 +52,19 @@ def main(argv=None):
         threading.Timer(0.05, stop).start()
         return {'stopping': True}
 
+    from silicolab.decision_notifications import DecisionNotifications
+    notifications=DecisionNotifications(workbench.state.workbench,directory)
+
+    workbench.state.workbench.notifications=notifications
+
     app.mount('/', workbench)
     descriptor = directory / 'background.json'
     atomic_json(descriptor, dict(state, token=token))
     try:
+        notifications.start()
         server.run(sockets=[listener])
     finally:
+        notifications.close()
         workbench.state.workbench.close()
         listener.close()
         try:

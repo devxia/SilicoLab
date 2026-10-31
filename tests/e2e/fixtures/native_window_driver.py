@@ -41,7 +41,9 @@ def instrumented(*args, **kwargs):
             except Exception:
                 pass
             time.sleep(0.05)
-    window.events.loaded += loaded
+    # Cocoa may stop while a read-only JS/URL observation awaits its callback.
+    # The test observer must not become a non-daemon owner of the GUI process.
+    window.events.loaded += lambda: threading.Thread(target=loaded,name='silicolab-native-evidence',daemon=True).start()
     return window
 
 

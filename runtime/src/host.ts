@@ -136,8 +136,8 @@ async function dispatch(request: Record<string, unknown>) {
     case 'task.start': {
       const conversationId = await chatId(request.conversationId);
       if (typeof request.requestId !== 'string' || !request.requestId || request.requestId.length > 200 || typeof request.goal !== 'string' || !request.goal.trim() || request.goal.length > 100000 || !Array.isArray(request.authorizedTools) || !request.authorizedTools.every((tool) => typeof tool === 'string')) throw new Error('任务目标、身份或授权格式不合法');
-      const options: ScienceOptions = { workflow: request.workflow === 'd2p_local' ? 'd2p_local' : request.workflow === 'simulated_external' ? 'simulated_external' : request.workflow === 'protein_factory_remote' ? 'protein_factory_remote' : 'validation' };
-      if (request.workflow && !['validation', 'd2p_local', 'simulated_external', 'protein_factory_remote'].includes(String(request.workflow))) throw new Error('未知任务模式');
+      const options: ScienceOptions = { workflow: request.workflow === 'd2p_local' ? 'd2p_local' : request.workflow === 'simulated_external' ? 'simulated_external' : request.workflow === 'protein_factory_remote' ? 'protein_factory_remote' : request.workflow === 'python_analysis' ? 'python_analysis' : 'validation' };
+      if (request.workflow && !['validation', 'd2p_local', 'simulated_external', 'protein_factory_remote', 'python_analysis'].includes(String(request.workflow))) throw new Error('未知任务模式');
       if (request.workflow === 'd2p_local') {
         const parameters = request.parameters as Record<string, unknown> | undefined;
         if (!parameters || !['preserve', 'add', 'ask'].includes(String(parameters.stopPolicy)) || typeof parameters.avoid !== 'string' || parameters.avoid.length > 2000 || typeof request.inputVersionId !== 'string') throw new Error('本地专项参数不完整');
@@ -151,6 +151,10 @@ async function dispatch(request: Record<string, unknown>) {
         options.parameters = { stopPolicy: parameters.stopPolicy as 'preserve' | 'add', avoid: parameters.avoid };
         options.inputVersionId = request.inputVersionId;
         options.specialtyAcknowledged = request.specialtyAcknowledged === true;
+      }
+      if (request.workflow === 'python_analysis') {
+        if (typeof request.inputVersionId !== 'string') throw new Error('临时Python分析需要固定输入版本');
+        options.inputVersionId = request.inputVersionId;
       }
       if (request.workflow === 'simulated_external') {
         const simulation = request.simulation as Record<string, unknown> | undefined;

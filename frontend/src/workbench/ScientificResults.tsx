@@ -6,7 +6,7 @@ import './results.css';
 type Tab = '序列表' | 'DNA 与密码子' | '校验与来源';
 const TABS: Tab[] = ['序列表', 'DNA 与密码子', '校验与来源'];
 export default function ScientificResults({ projectId, tasks }: { projectId: string; tasks: ResearchTask[] }) {
-  const candidates = tasks.flatMap((task) => task.toolExecutions.filter((execution) => execution.result?.records).map((execution) => ({ task, execution, result: execution.result as ScienceResult })));
+  const candidates = tasks.flatMap((task) => task.toolExecutions.filter((execution) => execution.result?.records && execution.tool !== 'python_analysis').map((execution) => ({ task, execution, result: execution.result as ScienceResult })));
   const [selection, setSelection] = useState('');
   const [recordIndex, setRecordIndex] = useState(0);
   const [tab, setTab] = useState<Tab>('序列表');

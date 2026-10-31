@@ -24,7 +24,19 @@ def main(channel_fd=None):
 
     def run(identity, request):
         process = None
+        analysis = None
         try:
+            if request.get('workflow') == 'python_analysis':
+                from silicolab.analysis_execution import run_analysis
+                def started(run):
+                    nonlocal analysis
+                    analysis = run
+                    with jobs_lock:
+                        jobs[identity]['analysis'] = run
+                    send({'id': identity, 'event': 'started', 'pid': run.pid})
+                response = run_analysis(request, started, jobs[identity]['cancelled_event'])
+                send({'id': identity, 'event': 'finished', 'response': response})
+                return
             with jobs_lock:
                 if closing.is_set() or jobs[identity]['cancelled']:
                     raise ValueError('科学任务在启动前已停止')
@@ -69,13 +81,17 @@ def main(channel_fd=None):
                         if identity in jobs:
                             raise ValueError('重复科学进程身份')
                         thread = threading.Thread(target=run, args=(identity, message['request']))
-                        jobs[identity] = {'thread': thread, 'process': None, 'cancelled': False}
+                        jobs[identity] = {'thread': thread, 'process': None, 'analysis': None, 'cancelled': False, 'cancelled_event': threading.Event()}
                     thread.start()
                 elif message['op'] == 'cancel':
                     with jobs_lock:
                         job = jobs.get(identity)
                         if job:
                             job['cancelled'] = True
+                            job['cancelled_event'].set()
+                            if job.get('analysis'):
+                                try: job['analysis'].stop()
+                                except (OSError, ValueError): pass
                         process = job.get('process') if job else None
                         if process and process.poll() is None:
                             process.kill()
@@ -84,6 +100,10 @@ def main(channel_fd=None):
         with jobs_lock:
             remaining = list(jobs.values())
             for job in remaining:
+                job['cancelled_event'].set()
+                if job.get('analysis'):
+                    try: job['analysis'].stop()
+                    except (OSError, ValueError): pass
                 process = job['process']
                 if process and process.poll() is None:
                     process.kill()

@@ -26,6 +26,9 @@ def main():
         for folder in ('python-runtime', 'python-probe'):
             shutil.copytree(ROOT / 'tools' / folder, source / 'tools' / folder,
                             ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
+        boundary = source / 'backend/src/silicolab/restricted_python.py'
+        boundary.parent.mkdir(parents=True)
+        shutil.copy2(ROOT / 'backend/src/silicolab/restricted_python.py', boundary)
         assert not list(source.rglob('node_modules')) and not list(source.rglob('.venv'))
         environment = {'PATH': '/usr/bin:/bin', 'HOME': str(root / 'empty-home'), 'LANG': 'en_US.UTF-8'}
         Path(environment['HOME']).mkdir()

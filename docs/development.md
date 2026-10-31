@@ -232,6 +232,18 @@ npm --prefix tools/runtime-probe run verify
 python3 -B tools/python-runtime/verify_distribution.py
 ```
 
+## 工作台受限临时Python分析
+
+[#16 受限分析契约](restricted-analysis.md) 复用#3唯一边界实现，模型生成脚本由应用监督器直接拥有的Seatbelt独立Python运行，固定value列CSV的JSON/Excel由原输入独立核验。缺运行时/无产物/错误结果明确阻断，不自动安装或回退宿主shell。
+
+```bash
+python3 -B tools/python-runtime/build.py --output release/PythonBoundaryProbe.app
+.venv/bin/python -B -m unittest discover -s backend/tests -p test_restricted_analysis.py -v
+.venv/bin/python -B tests/e2e/browser_workbench_analysis.py
+```
+
+集成测试须先显式构建预装runtime，未预装的skip不是交付通过；正式包仍需独立验收。
+
 ## 浏览器流程
 
 使用 Playwright 和本机 Chrome；夹具仅监听 8766，使用临时数据库。每组测试启动一个全新的夹具，在另一个终端运行对应脚本，完成后停止夹具。

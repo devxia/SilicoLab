@@ -47,7 +47,7 @@ class TaskInput(BaseModel):
     requestId: str = Field(min_length=1, max_length=200)
     goal: str = Field(min_length=1, max_length=100000)
     authorizedTools: list[str] = Field(default_factory=list, max_length=20)
-    workflow: Literal['validation', 'd2p_local', 'simulated_external', 'protein_factory_remote'] = 'validation'
+    workflow: Literal['validation', 'd2p_local', 'simulated_external', 'protein_factory_remote', 'python_analysis'] = 'validation'
     simulation: SimulationInput | None = None
     specialtyAcknowledged: bool = False
     inputVersionId: str | None = Field(default=None, max_length=100)

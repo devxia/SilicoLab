@@ -60,6 +60,7 @@ def main():
             source.extractall(packages)
     probe = resources / 'probe'
     shutil.copytree(ROOT / 'tools/python-probe', probe, ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
+    shutil.copy2(ROOT / 'backend/src/silicolab/restricted_python.py', probe / 'execution.py')
     (app / 'Contents/MacOS').mkdir()
     subprocess.run(['/usr/bin/clang', '-O2', str(Path(__file__).with_name('probe-launcher.c')), '-o', str(app / 'Contents/MacOS/PythonBoundaryProbe')], check=True)
     with (app / 'Contents/Info.plist').open('wb') as output:

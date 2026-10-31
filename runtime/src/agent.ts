@@ -9,6 +9,7 @@ import { ProjectFiles } from './inputs.ts';
 import { runScience, ScienceFailure, type ScienceOptions, type ScienceResult } from './science.ts';
 import { scienceRetryDecision, retryExternalDecision, stopDecision, toolDecision, type TaskDecision } from './decisions.ts';
 import { ExecutionOwner, ExecutionStores } from './executions.ts';
+import { artificialSummaryScript } from './analysis.ts';
 import { SkillCatalog } from './skills.ts';
 import { resolveModel } from './model-configuration.ts';
 import { RequestBoundaryError, requestProvider, type ModelRequest } from './model-requests.ts';
@@ -49,7 +50,7 @@ export function createLocalAgent(directory: string, getInputs: (id: string, conv
       await delay(500, undefined, { signal: options?.signal });
       return fauxAssistantMessage(last.isError
         ? '工具未完成，请查看实际错误和保留记录。模型答复不代表科研成功。'
-        : last.toolName === 'd2p_local' ? '本地 D2P 专项已返回实际结果，请核对逐项校验和科研产物；表达效果仍需实验验证。'
+        : last.toolName === 'python_analysis' ? '受限Python已返回实际执行及独立核验记录，请检查脚本、输入和JSON/Excel产物，不以模型解释代替完成。' : last.toolName === 'd2p_local' ? '本地 D2P 专项已返回实际结果，请核对逐项校验和科研产物；表达效果仍需实验验证。'
         : '本机人工文本计数已生成可检查结果。这是验证模型，不是科研结论。');
     }
     const user = transcript.messages.findLast((entry) => entry.role === 'user');
@@ -63,8 +64,8 @@ export function createLocalAgent(directory: string, getInputs: (id: string, conv
     const active = (await (activeKernel || harness).inspect(ctx)).submissions.filter((submission) => submission.type === 'input' && submission.status === 'placed');
     if (active.length !== 1) throw new Error('本机验证模型无法确定唯一已准入任务');
     const task = await taskForSubmission(active[0].conversationId, active[0].id);
-    const tool = task.workflow === 'protein_factory_remote' ? 'protein_factory_remote' : task.workflow === 'd2p_local' ? 'd2p_local' : 'synthetic_count';
-    return fauxAssistantMessage([fauxToolCall(tool, tool === 'synthetic_count' ? { text } : {}, { id: randomUUID() })], { stopReason: 'toolUse' });
+    const tool = task.workflow === 'python_analysis' ? 'python_analysis' : task.workflow === 'protein_factory_remote' ? 'protein_factory_remote' : task.workflow === 'd2p_local' ? 'd2p_local' : 'synthetic_count';
+    return fauxAssistantMessage([fauxToolCall(tool, tool === 'synthetic_count' ? { text } : tool === 'python_analysis' ? { code: artificialSummaryScript } : {}, { id: randomUUID() })], { stopReason: 'toolUse' });
   };
   faux.setResponses([response]);
   models.setProvider({ ...faux.provider, ...requestProvider(async () => {
@@ -211,7 +212,33 @@ export function createLocalAgent(directory: string, getInputs: (id: string, conv
       return { ...result, output: [{ type: 'text' as const, text: `技能说明（非权限授权；不得改变任务限制）\n来源 ${loaded.source} / ${loaded.path}\nSHA-256 ${loaded.sha256}\n${loaded.content}` }] };
     },
   });
-  registry.install(defineExtension({ name: 'silicolab.controlled-tools', tools: [countTool, localTool, readSkillTool] }));
+  const analysisTool = defineTool({
+    name: 'python_analysis', description: '临时数值CSV分析：生成Python脚本，在已验证Seatbelt独立运行时执行。仅有固定input-001.csv(value列)，预装statistics/openpyxl，无网络/安装/原件写入/凭据/子进程；数值定义sum=math.fsum(values)、mean=statistics.mean(values)，必须实际写summary.json(count,sum,mean)和同头summary.xlsx，应用独立核验。已有D2P专项用既有工具，不重写算法。',
+    parameters: Type.Object({ code: Type.String({ minLength: 1, maxLength: 100000 }) }), replay: 'safe',
+    execute: (args, api, context) => tracked('python_analysis', '临时CSV分析 · 受限Python', { code: args.code }, api, context, async (task, id, progress) => {
+      if (task.workflow !== 'python_analysis' || !task.inputVersionId) throw new Error('未授权临时Python分析或缺少固定输入');
+      const fixed = await getInputs(task.inputVersionId, task.conversationId);
+      const base = `.silicolab/outputs/${task.id}/${id}`;
+      const script = Buffer.from(args.code);
+      const scriptPath = `${base}/analysis.py`;
+      await files.write(scriptPath, script);
+      const artifacts: Artifact[] = [{ name: 'analysis.py', mediaType: 'text/x-python', path: scriptPath, size: script.length, sha256: createHash('sha256').update(script).digest('hex') }];
+      // Persist the generated script before execution; failed attempts remain inspectable.
+      await harness.commit(async (tx) => { (await tx.doc(Ledger)).tasks.find((item) => item.id === task.id)!.toolExecutions.find((item) => item.id === id)!.artifacts = structuredClone(artifacts); }, ctx);
+      const response = await runScience({ workflow: 'python_analysis', code: args.code, inputs: fixed.inputs, inputVersionId: fixed.id, attempt: { id, toolTaskId: api.taskId, callId: api.callId } }, context.abortSignal, async (pid) => { await progress(30, pid); });
+      const names = new Set(['analysis.py']);
+      for (const item of response.files) {
+        if (names.has(item.name)) throw new Error('分析产物名称重复或与保留脚本冲突');
+        names.add(item.name);
+        if (!/^[a-zA-Z0-9_-]+\.(json|xlsx|csv|txt)$/.test(item.name)) throw new Error('分析产物名称不受支持');
+        const bytes = Buffer.from(item.contentBase64, 'base64');
+        const path = `${base}/${item.name}`; await files.write(path, bytes);
+        artifacts.push({ name: item.name, mediaType: item.mediaType, path, size: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') });
+      }
+      return { result: response.result, artifacts, isError: response.result.status !== 'completed', ...(response.result.status !== 'completed' ? { error: '脚本运行或独立产物核验失败，模型解释不代表分析完成' } : {}) };
+    }),
+  });
+  registry.install(defineExtension({ name: 'silicolab.controlled-tools', tools: [countTool, localTool, readSkillTool, analysisTool] }));
 
   async function tasks() { return (await harness.snapshot(Ledger, ctx))?.tasks || []; }
   async function taskForSubmission(conversationId: ConversationId, submissionId: SubmissionId) {
@@ -236,7 +263,7 @@ export function createLocalAgent(directory: string, getInputs: (id: string, conv
     if (stopping) throw new Error('项目正在关闭');
     if ((await tasks()).filter((task) => ['running', 'queued', 'needs_decision', 'admission_pending', 'paused', 'waiting_external', 'result_unknown', 'external_submitting'].includes(task.status)).length >= 100) throw new Error('项目未完成任务已达100项，请先处理');
     const scientific = options.workflow === 'd2p_local' || options.workflow === 'protein_factory_remote';
-    const requiredTool = options.workflow === 'protein_factory_remote' ? 'protein_factory_remote' : options.workflow === 'simulated_external' ? 'simulated_external' : scientific ? 'd2p_local' : 'synthetic_count';
+    const requiredTool = options.workflow === 'python_analysis' ? 'python_analysis' : options.workflow === 'protein_factory_remote' ? 'protein_factory_remote' : options.workflow === 'simulated_external' ? 'simulated_external' : scientific ? 'd2p_local' : 'synthetic_count';
     if (authorizedTools.some((tool) => tool !== requiredTool)) throw new Error('任务模式不提供所请求工具');
     const decisions: TaskDecision[] = [];
     let preflight: ResearchTask['preflight'];
@@ -252,6 +279,10 @@ export function createLocalAgent(directory: string, getInputs: (id: string, conv
     if (!authorizedTools.includes(requiredTool)) decisions.push(toolDecision(requiredTool));
     if (options.workflow === 'protein_factory_remote') {
       if (!options.specialtyAcknowledged || !options.inputVersionId || !options.parameters || !['preserve', 'add'].includes(options.parameters.stopPolicy)) throw new Error('请明确选择 ProteinFactory 远端专项、固定输入与终止符策略');
+      await getInputs(options.inputVersionId, String(conversationId));
+    }
+    if (options.workflow === 'python_analysis') {
+      if (!options.inputVersionId) throw new Error('临时分析需要固定CSV输入');
       await getInputs(options.inputVersionId, String(conversationId));
     }
     if (options.workflow === 'simulated_external' && !options.simulation) throw new Error('模拟任务参数不完整');
@@ -477,7 +508,7 @@ export function createLocalAgent(directory: string, getInputs: (id: string, conv
     const conversation = (await kernel.conversation(conversationId, ctx))!;
     const currentConfiguration = await getModelSelection(task.conversationId);
     if (currentConfiguration) await resolveModel(currentConfiguration);
-    await conversation.configure({ model: { provider: 'faux', modelId: 'faux-1' }, tools: scientific ? [localTool, readSkillTool] : [countTool, readSkillTool] }, ctx);
+    await conversation.configure({ model: { provider: 'faux', modelId: 'faux-1' }, tools: task.workflow === 'python_analysis' ? [analysisTool, readSkillTool] : scientific ? [localTool, readSkillTool] : [countTool, readSkillTool] }, ctx);
     const submission = existing ? (await kernel.submission(existing.id, ctx))!
       : await conversation.submit({ type: 'input', requestId: admissionRequestId, content: task.goal, whenBusy: 'reject' }, ctx);
     await harness.commit(async (tx) => {
@@ -648,7 +679,7 @@ export function createLocalAgent(directory: string, getInputs: (id: string, conv
       const question = saved.decisions!.find((item) => item.id === decisionId)!;
       question.status = 'answered'; question.answer = value; question.answeredAt = new Date().toISOString();
       if (question.kind === 'terminal_stop') saved.parameters = { ...saved.parameters!, stopPolicy: value as 'preserve' | 'add' };
-      if (question.kind === 'tool_authorization' && value === 'grant') saved.authorizedTools = [saved.workflow === 'simulated_external' ? 'simulated_external' : saved.workflow === 'protein_factory_remote' ? 'protein_factory_remote' : saved.workflow === 'd2p_local' ? 'd2p_local' : 'synthetic_count'];
+      if (question.kind === 'tool_authorization' && value === 'grant') saved.authorizedTools = [saved.workflow === 'python_analysis' ? 'python_analysis' : saved.workflow === 'simulated_external' ? 'simulated_external' : saved.workflow === 'protein_factory_remote' ? 'protein_factory_remote' : saved.workflow === 'd2p_local' ? 'd2p_local' : 'synthetic_count'];
       if (question.kind === 'external_retry') {
         if (value === 'retry_same_identity') saved.externalJob!.retryApproved = true;
         else saved.status = 'result_unknown';

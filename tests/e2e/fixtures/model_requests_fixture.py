@@ -18,7 +18,7 @@ if __name__ == '__main__':
         second = stack.enter_context(FakeModelEndpoint('anthropic-messages', 'artificial-b', ['rate_limit', 'normal']))
         def no_science(_payload):
             raise RuntimeError('No real science in model requests fixture')
-        workbench = create_app(Path(directory) / 'app.sqlite3', optimizer=no_science, delay=0, credential_store=MemorySecrets(), skill_roots=[])
+        workbench = create_app(Path(directory) / 'app.sqlite3', optimizer=no_science, delay=0, credential_store=MemorySecrets(), skill_roots=[], mcp_roots=[])
         app = FastAPI(lifespan=workbench.router.lifespan_context)
         @app.get('/__test/model-requests')
         def info():

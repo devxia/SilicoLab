@@ -45,6 +45,7 @@ export function createLocalAgent(directory: string, getInputs: (id: string, conv
     faux.appendResponses([response]);
     const last = transcript.messages.at(-1);
     if (last?.role === 'toolResult') {
+      if (last.toolName === 'mcp_call') return fauxAssistantMessage(last.isError ? 'MCP调用未完成，请查看真实错误；没有自动重提或换来源。' : '已取得明确授权MCP工具的真实结果，请检查来源、schema和内容；来源信任不代表任意权限。');
       if (last.toolName === 'read_skill') return fauxAssistantMessage('已按需读取技能并记录来源。技能文字不增加任务权限，不执行其中的脚本、安装或联网指令。');
       // Faux adapter models an observable, cancellable in-flight final request.
       await delay(500, undefined, { signal: options?.signal });
@@ -64,7 +65,7 @@ export function createLocalAgent(directory: string, getInputs: (id: string, conv
     const active = (await (activeKernel || harness).inspect(ctx)).submissions.filter((submission) => submission.type === 'input' && submission.status === 'placed');
     if (active.length !== 1) throw new Error('本机验证模型无法确定唯一已准入任务');
     const task = await taskForSubmission(active[0].conversationId, active[0].id);
-    const tool = task.workflow === 'python_analysis' ? 'python_analysis' : task.workflow === 'protein_factory_remote' ? 'protein_factory_remote' : task.workflow === 'd2p_local' ? 'd2p_local' : 'synthetic_count';
+    const tool = task.workflow === 'mcp_tool' ? 'mcp_call' : task.workflow === 'python_analysis' ? 'python_analysis' : task.workflow === 'protein_factory_remote' ? 'protein_factory_remote' : task.workflow === 'd2p_local' ? 'd2p_local' : 'synthetic_count';
     return fauxAssistantMessage([fauxToolCall(tool, tool === 'synthetic_count' ? { text } : tool === 'python_analysis' ? { code: artificialSummaryScript } : {}, { id: randomUUID() })], { stopReason: 'toolUse' });
   };
   faux.setResponses([response]);
@@ -238,7 +239,15 @@ export function createLocalAgent(directory: string, getInputs: (id: string, conv
       return { result: response.result, artifacts, isError: response.result.status !== 'completed', ...(response.result.status !== 'completed' ? { error: '脚本运行或独立产物核验失败，模型解释不代表分析完成' } : {}) };
     }),
   });
-  registry.install(defineExtension({ name: 'silicolab.controlled-tools', tools: [countTool, localTool, readSkillTool, analysisTool] }));
+  const mcpTool = defineTool({
+    name:'mcp_call',description:'只调用当前任务已授权并信任来源的MCP工具，实际工具/schema/参数取任务固定记录；来源信任不增加权限，不提供科学提交或任意shell。',parameters:Type.Object({}),replay:'unsafe',
+    execute:(_args,api,context)=>tracked('mcp_call','MCP已授权来源',{},api,context,async(task,id,progress)=>{
+      if(task.workflow!=='mcp_tool'||!task.mcp||!task.mcpTool)throw new Error('当前任务无MCP范围');
+      const response=await runScience({workflow:'mcp_tool',operation:'call',mcp:task.mcp,tool:task.mcpTool,arguments:task.mcpArguments},context.abortSignal,async(pid)=>progress(20,pid));
+      return {result:response.result,isError:response.result.status!=='completed'};
+    }),
+  });
+  registry.install(defineExtension({ name: 'silicolab.controlled-tools', tools: [countTool, localTool, readSkillTool, analysisTool, mcpTool] }));
 
   async function tasks() { return (await harness.snapshot(Ledger, ctx))?.tasks || []; }
   async function taskForSubmission(conversationId: ConversationId, submissionId: SubmissionId) {
@@ -257,13 +266,13 @@ export function createLocalAgent(directory: string, getInputs: (id: string, conv
     if (existing) {
       const admitted = existing.admission || { authorizedTools: existing.authorizedTools, options: { workflow: existing.workflow, parameters: existing.parameters, inputVersionId: existing.inputVersionId, specialtyAcknowledged: existing.specialtyAcknowledged } };
       const original = admitted.options;
-      if (existing.goal !== goal || JSON.stringify(admitted.authorizedTools) !== JSON.stringify(authorizedTools) || JSON.stringify(original.parameters) !== JSON.stringify(options.parameters) || original.inputVersionId !== options.inputVersionId || (original.workflow || 'validation') !== (options.workflow || 'validation') || Boolean(original.specialtyAcknowledged) !== Boolean(options.specialtyAcknowledged) || JSON.stringify(original.simulation) !== JSON.stringify(options.simulation)) throw new Error('请求身份已用于不同目标、输入或权限');
+      if (existing.goal !== goal || JSON.stringify(admitted.authorizedTools) !== JSON.stringify(authorizedTools) || JSON.stringify(original.parameters) !== JSON.stringify(options.parameters) || original.inputVersionId !== options.inputVersionId || (original.workflow || 'validation') !== (options.workflow || 'validation') || Boolean(original.specialtyAcknowledged) !== Boolean(options.specialtyAcknowledged) || JSON.stringify(original.simulation) !== JSON.stringify(options.simulation) || JSON.stringify(original.mcp) !== JSON.stringify(options.mcp) || original.mcpTool !== options.mcpTool || JSON.stringify(original.mcpArguments)!==JSON.stringify(options.mcpArguments)) throw new Error('请求身份已用于不同目标、输入或权限');
       return existing;
     }
     if (stopping) throw new Error('项目正在关闭');
     if ((await tasks()).filter((task) => ['running', 'queued', 'needs_decision', 'admission_pending', 'paused', 'waiting_external', 'result_unknown', 'external_submitting'].includes(task.status)).length >= 100) throw new Error('项目未完成任务已达100项，请先处理');
     const scientific = options.workflow === 'd2p_local' || options.workflow === 'protein_factory_remote';
-    const requiredTool = options.workflow === 'python_analysis' ? 'python_analysis' : options.workflow === 'protein_factory_remote' ? 'protein_factory_remote' : options.workflow === 'simulated_external' ? 'simulated_external' : scientific ? 'd2p_local' : 'synthetic_count';
+    const requiredTool = options.workflow === 'mcp_tool' ? 'mcp_call' : options.workflow === 'python_analysis' ? 'python_analysis' : options.workflow === 'protein_factory_remote' ? 'protein_factory_remote' : options.workflow === 'simulated_external' ? 'simulated_external' : scientific ? 'd2p_local' : 'synthetic_count';
     if (authorizedTools.some((tool) => tool !== requiredTool)) throw new Error('任务模式不提供所请求工具');
     const decisions: TaskDecision[] = [];
     let preflight: ResearchTask['preflight'];
@@ -281,6 +290,7 @@ export function createLocalAgent(directory: string, getInputs: (id: string, conv
       if (!options.specialtyAcknowledged || !options.inputVersionId || !options.parameters || !['preserve', 'add'].includes(options.parameters.stopPolicy)) throw new Error('请明确选择 ProteinFactory 远端专项、固定输入与终止符策略');
       await getInputs(options.inputVersionId, String(conversationId));
     }
+    if(options.workflow==='mcp_tool'&&(!options.mcp||!options.mcpTool||!options.mcpArguments))throw new Error('MCP授权参数不完整');
     if (options.workflow === 'python_analysis') {
       if (!options.inputVersionId) throw new Error('临时分析需要固定CSV输入');
       await getInputs(options.inputVersionId, String(conversationId));
@@ -508,7 +518,7 @@ export function createLocalAgent(directory: string, getInputs: (id: string, conv
     const conversation = (await kernel.conversation(conversationId, ctx))!;
     const currentConfiguration = await getModelSelection(task.conversationId);
     if (currentConfiguration) await resolveModel(currentConfiguration);
-    await conversation.configure({ model: { provider: 'faux', modelId: 'faux-1' }, tools: task.workflow === 'python_analysis' ? [analysisTool, readSkillTool] : scientific ? [localTool, readSkillTool] : [countTool, readSkillTool] }, ctx);
+    await conversation.configure({ model: { provider: 'faux', modelId: 'faux-1' }, tools: task.workflow === 'mcp_tool' ? [mcpTool,readSkillTool] : task.workflow === 'python_analysis' ? [analysisTool, readSkillTool] : scientific ? [localTool, readSkillTool] : [countTool, readSkillTool] }, ctx);
     const submission = existing ? (await kernel.submission(existing.id, ctx))!
       : await conversation.submit({ type: 'input', requestId: admissionRequestId, content: task.goal, whenBusy: 'reject' }, ctx);
     await harness.commit(async (tx) => {
@@ -679,7 +689,7 @@ export function createLocalAgent(directory: string, getInputs: (id: string, conv
       const question = saved.decisions!.find((item) => item.id === decisionId)!;
       question.status = 'answered'; question.answer = value; question.answeredAt = new Date().toISOString();
       if (question.kind === 'terminal_stop') saved.parameters = { ...saved.parameters!, stopPolicy: value as 'preserve' | 'add' };
-      if (question.kind === 'tool_authorization' && value === 'grant') saved.authorizedTools = [saved.workflow === 'python_analysis' ? 'python_analysis' : saved.workflow === 'simulated_external' ? 'simulated_external' : saved.workflow === 'protein_factory_remote' ? 'protein_factory_remote' : saved.workflow === 'd2p_local' ? 'd2p_local' : 'synthetic_count'];
+      if (question.kind === 'tool_authorization' && value === 'grant') saved.authorizedTools = [saved.workflow === 'mcp_tool' ? 'mcp_call' : saved.workflow === 'python_analysis' ? 'python_analysis' : saved.workflow === 'simulated_external' ? 'simulated_external' : saved.workflow === 'protein_factory_remote' ? 'protein_factory_remote' : saved.workflow === 'd2p_local' ? 'd2p_local' : 'synthetic_count'];
       if (question.kind === 'external_retry') {
         if (value === 'retry_same_identity') saved.externalJob!.retryApproved = true;
         else saved.status = 'result_unknown';
@@ -757,6 +767,9 @@ export function createLocalAgent(directory: string, getInputs: (id: string, conv
       scheduling: (await inspection()).scheduling };
   }
   return { models, registry, bind(value: Harness) { harness = value; files.check(); }, start, tasks, conversation, cancel, artifact, answer, continueTask, reconcileOpen, preparePause, resume, inspection, closeExecutions, reconcileExternal, cancelExternal, reconcileScience,
+    async connectMcp(mcp: Record<string,unknown>) {
+      const response=await runScience({workflow:'mcp_tool',operation:'list',mcp},undefined,async()=>{});return response.result;
+    },
     async verifyProject() {
       for (const task of await tasks()) {
         if (task.inputVersionId) await getInputs(task.inputVersionId, task.conversationId);

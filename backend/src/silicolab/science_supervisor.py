@@ -26,6 +26,14 @@ def main(channel_fd=None):
         process = None
         analysis = None
         try:
+            if request.get('workflow') == 'mcp_tool':
+                from silicolab.mcp_execution import run_mcp
+                def mcp_started(run):
+                    with jobs_lock: jobs[identity]['analysis'] = run
+                    send({'id': identity, 'event': 'started', 'pid': run.pid})
+                response=run_mcp(request,mcp_started,jobs[identity]['cancelled_event'])
+                send({'id': identity, 'event': 'finished', 'response': response})
+                return
             if request.get('workflow') == 'python_analysis':
                 from silicolab.analysis_execution import run_analysis
                 def started(run):

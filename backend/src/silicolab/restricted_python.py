@@ -88,7 +88,7 @@ class PythonProbe:
             "sandbox": "macOS Seatbelt via deprecated sandbox-exec; single-process policy",
         }
 
-    def start(self, code: str, *, inputs=()) -> Analysis:
+    def start(self, code: str, *, inputs=(), interactive=False) -> Analysis:
         if self._closed:
             raise RuntimeError("probe already closed")
         task = Path(tempfile.mkdtemp(prefix="task-", dir=self.directory))
@@ -140,7 +140,7 @@ class PythonProbe:
                 cwd=output_directory,
                 env={"PATH": "/usr/bin:/bin", "HOME": str(output_directory), "TMPDIR": str(output_directory),
                      "LANG": "en_US.UTF-8", "PYTHONNOUSERSITE": "1"},
-                stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr, close_fds=True,
+                stdin=subprocess.PIPE if interactive else subprocess.DEVNULL, stdout=stdout, stderr=stderr, close_fds=True,
                 start_new_session=True, preexec_fn=_limits,
             )
         except BaseException:
@@ -216,7 +216,23 @@ class Analysis:
             except ProcessLookupError:
                 pass
             self._process.wait(timeout=5)
+        if self._process.stdin is not None and not self._process.stdin.closed:
+            self._process.stdin.close()
         return self.status()
+
+    def send(self, message):
+        if self._process.stdin is None or self._process.poll() is not None: raise ValueError('受限stdio进程不接受输入')
+        content=(json.dumps(message,separators=(',',':'))+'\n').encode()
+        if len(content)>65536:raise ValueError('MCP消息超限')
+        import select,time
+        descriptor=self._process.stdin.fileno()
+        os.set_blocking(descriptor,False)
+        pending=memoryview(content);deadline=time.monotonic()+2
+        while pending:
+            if time.monotonic()>=deadline or not select.select([], [descriptor], [], max(0,deadline-time.monotonic()))[1]:raise TimeoutError('MCP stdin写入超时')
+            try:written=os.write(descriptor,pending)
+            except BlockingIOError:continue
+            pending=pending[written:]
 
     def log(self, name, max_bytes=1024 * 1024):
         """Inspect retained descriptors, not replaceable output path aliases."""

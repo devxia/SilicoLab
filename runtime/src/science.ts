@@ -1,10 +1,11 @@
+import type { JsonObject } from '@earendil-works/pi-durable';
 import { Socket } from 'node:net';
 import { createInterface } from 'node:readline';
 import { randomUUID } from 'node:crypto';
 
 export type ScienceParameters = { stopPolicy: 'preserve' | 'add' | 'ask'; avoid: string };
 export type SimulationOptions = { payload: string; durationMs: number; queryable: boolean; responseMode: 'normal' | 'lost' | 'hold_after_accept' };
-export type ScienceOptions = { modelConfigurationId?: string; workflow?: 'validation' | 'd2p_local' | 'simulated_external' | 'protein_factory_remote' | 'python_analysis'; simulation?: SimulationOptions; specialtyAcknowledged?: boolean; inputVersionId?: string; parameters?: ScienceParameters };
+export type ScienceOptions = { modelConfigurationId?: string; workflow?: 'validation' | 'd2p_local' | 'simulated_external' | 'protein_factory_remote' | 'python_analysis' | 'mcp_tool'; mcp?: JsonObject; mcpTool?: string; mcpArguments?: JsonObject; simulation?: SimulationOptions; specialtyAcknowledged?: boolean; inputVersionId?: string; parameters?: ScienceParameters };
 export type ScienceRecord = { name: string; protein: string; status: string; dna?: string; error?: string; checks?: Record<string, boolean> };
 export type ScienceResult = { status: string; inputVersionId: string; engine_info: Record<string, string | number | boolean>; records: ScienceRecord[]; network_attempts: number | null; network_guard_self_test?: string; scope: string; missingStopNames?: string[] };
 export type ScienceResponse = { ok: boolean; error?: string; result: ScienceResult; files: { name: string; mediaType: string; contentBase64: string }[] };

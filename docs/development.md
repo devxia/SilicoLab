@@ -205,6 +205,18 @@ worker 的网络拒绝钩子只针对可信科学入口，不能代替不可信 
 
 需预装已验证分析runtime；重启恢复场景通过结束全部受管进程再新服务读取持久化演练，不擅自重启OS、不宣称断电零丢失。
 
+## MCP发现、信任与受控调用
+
+[#18 MCP契约](mcp-resources.md) 支持公开独立JSON方言/固定位置，发现不启动；精确来源与脚本hash首次确认、任务授权分离。仅受限独立Python stdio与明确HTTP端点，任意命令/环境认证导入拒绝，真实协议/schema/结果和取消由人工服务验收。
+
+```bash
+.venv/bin/python -B -m unittest discover -s backend/tests -p test_mcp_resources.py -v
+.venv/bin/python -B tests/e2e/fixtures/mcp_workbench_fixture.py
+.venv/bin/python -B tests/e2e/browser_workbench_mcp.py
+```
+
+stdio须显式预装已验证runtime，不能将#3Python结果自动推给任意MCP命令。
+
 ## 常规检查
 
 ```bash

@@ -344,7 +344,7 @@ class Worker:
         self.store.mutate(job_id, finish_job)
 
 
-def create_app(db_path=None, optimizer=None, delay=0.5, credential_store=None, skill_roots=None):
+def create_app(db_path=None, optimizer=None, delay=0.5, credential_store=None, skill_roots=None, mcp_roots=None):
     database = db_path or browser_database()
     store = Store(database)
     worker = Worker(store, optimizer or default_optimizer, delay)
@@ -354,6 +354,8 @@ def create_app(db_path=None, optimizer=None, delay=0.5, credential_store=None, s
     workbench = Workbench(Path(database).with_name('projects.json'))
     workbench.model_configuration = model_configuration
     workbench.skill_roots = skill_roots
+    from silicolab.mcp_resources import McpResources
+    workbench.mcp_resources = McpResources(Path(database).with_name('mcp-trust.json'), mcp_roots)
 
     @asynccontextmanager
     async def lifespan(app):

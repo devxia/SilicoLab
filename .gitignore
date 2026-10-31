@@ -51,6 +51,9 @@ node_modules/
 # Application model metadata (keys belong only in Keychain)
 model-configs.json
 model-configs-*.tmp
+.mcp.json
+mcp-trust.json
+mcp-trust.json.*.tmp
 # Native owner/control descriptors include local authorization tokens
 background.json
 background.lock

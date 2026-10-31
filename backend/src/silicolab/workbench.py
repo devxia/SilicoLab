@@ -47,7 +47,11 @@ class TaskInput(BaseModel):
     requestId: str = Field(min_length=1, max_length=200)
     goal: str = Field(min_length=1, max_length=100000)
     authorizedTools: list[str] = Field(default_factory=list, max_length=20)
-    workflow: Literal['validation', 'd2p_local', 'simulated_external', 'protein_factory_remote', 'python_analysis'] = 'validation'
+    workflow: Literal['validation', 'd2p_local', 'simulated_external', 'protein_factory_remote', 'python_analysis', 'mcp_tool'] = 'validation'
+    mcpResourceId: str | None = Field(default=None,max_length=64)
+    mcpFingerprint: str | None = Field(default=None,max_length=64)
+    mcpTool: str | None = Field(default=None,max_length=100)
+    mcpArguments: dict = Field(default_factory=dict)
     simulation: SimulationInput | None = None
     specialtyAcknowledged: bool = False
     inputVersionId: str | None = Field(default=None, max_length=100)
@@ -195,8 +199,8 @@ class ProjectHost:
                 task['pauseReason'] = '目录离线；仅显示最后已观察快照，最新进度未确认保存'
         return saved
 
-    def _read(self):
-        if not select.select([self._process.stdout], [], [], 10)[0]:
+    def _read(self,timeout=10):
+        if not select.select([self._process.stdout], [], [], timeout)[0]:
             raise ValueError('智能体宿主响应超时')
         line = self._process.stdout.readline()
         if not line:
@@ -213,9 +217,19 @@ class ProjectHost:
             self._next += 1
             self._process.stdin.write(json.dumps({'id': self._next, 'op': op, **values}) + '\n')
             self._process.stdin.flush()
-            response = self._read()
-            if response.get('id') != self._next:
-                raise ValueError('智能体宿主响应身份不匹配')
+            try:
+                response = self._read(timeout=70 if op=='mcp.connect' else 10)
+                if response.get('id') != self._next:
+                    raise ValueError('智能体宿主响应身份不匹配')
+            except (OSError,ValueError):
+                # Never leave a late response in this JSONL stream for the next caller.
+                if self._process.poll() is None:
+                    self._process.kill();self._process.wait(timeout=5)
+                if self._supervisor:
+                    try:self._supervisor.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        self._supervisor.kill();self._supervisor.wait(timeout=5)
+                raise
             if 'error' in response:
                 raise ValueError(response['error'])
             if op == 'status':
@@ -396,6 +410,9 @@ class Workbench:
                         if op == 'status': return {**snapshot, 'path': item['path']}
                         raise
                     with self._lock: host = self._hosts[canonical]
+                if op == 'task.start' and values.get('workflow') == 'mcp_tool':
+                    if values.get('authorizedTools') != ['mcp_call']: raise ValueError('MCP来源信任不是任务授权；请明确允许此任务mcp_call')
+                    values['mcp'] = self.mcp_resources.resolve(item['path'],values.get('mcpResourceId'),values.get('mcpFingerprint'))
                 result = host.call(op, **values)
                 if op == 'task.pause' and result.get('pausedHost'):
                     host.close()
@@ -519,6 +536,31 @@ def router(workbench):
     @routes.get('/projects/{project_id}/resources/skills')
     def list_skills(project_id: str):
         return invoke(workbench.call, project_id, 'skills.list')
+
+    @routes.get('/projects/{project_id}/resources/mcp')
+    def list_mcp(project_id: str):
+        project=invoke(workbench.call,project_id,'status')
+        return invoke(workbench.mcp_resources.list,project['path'])
+
+    @routes.post('/projects/{project_id}/resources/mcp/{resource_id}/trust')
+    def trust_mcp(project_id: str,resource_id: str,values: dict):
+        project=invoke(workbench.call,project_id,'status')
+        return invoke(workbench.mcp_resources.trust,project['path'],resource_id,values.get('fingerprint'))
+
+    @routes.post('/projects/{project_id}/resources/mcp/{resource_id}/connect')
+    def connect_mcp(project_id: str,resource_id: str,values: dict):
+        project=invoke(workbench.call,project_id,'status')
+        item=invoke(workbench.mcp_resources.resolve,project['path'],resource_id,values.get('fingerprint'))
+        try:
+            workbench.mcp_resources.states[(resource_id,item['fingerprint'])]={'status':'connecting'}
+            result=workbench.call(project_id,'mcp.connect',mcp=item)
+            workbench.mcp_resources.states[(resource_id,item['fingerprint'])]={'status':'callable','tools':result['tools']}
+            return result
+        except (OSError,ValueError) as error:
+            needs_configuration='MCP_NEEDS_CONFIGURATION' in str(error)
+            reason='MCP服务要求认证，本版不导入其他软件凭据；需要显式连接配置' if needs_configuration else 'MCP连接失败或协议/权限不兼容，未回退启动'
+            workbench.mcp_resources.states[(resource_id,item['fingerprint'])]={'status':'needs_configuration' if needs_configuration else 'failed','reason':reason}
+            raise HTTPException(409,reason) from error
 
     @routes.get('/model-configs')
     def model_configs():

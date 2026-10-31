@@ -17,7 +17,7 @@ if __name__ == '__main__':
         endpoints = {protocol: stack.enter_context(FakeModelEndpoint(protocol, 'artificial-ui-key-' + protocol)) for protocol in ('openai-responses', 'anthropic-messages')}
         def no_science(_payload):
             raise RuntimeError('No science calls in model UI fixture')
-        workbench = create_app(Path(directory) / 'app.sqlite3', optimizer=no_science, delay=0, credential_store=MemorySecrets(), skill_roots=[])
+        workbench = create_app(Path(directory) / 'app.sqlite3', optimizer=no_science, delay=0, credential_store=MemorySecrets(), skill_roots=[], mcp_roots=[])
         app = FastAPI(lifespan=workbench.router.lifespan_context)
         @app.get('/__test/model-endpoints')
         def endpoint_info():

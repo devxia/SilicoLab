@@ -24,7 +24,7 @@ if __name__ == '__main__':
         (broken / 'SKILL.md').write_text('broken artificial file')
         def no_science(_payload):
             raise RuntimeError('No actual science in skills fixture')
-        workbench = create_app(root / 'app.sqlite3', optimizer=no_science, delay=0, skill_roots=[str(user)])
+        workbench = create_app(root / 'app.sqlite3', optimizer=no_science, delay=0, skill_roots=[str(user)], mcp_roots=[])
         app = FastAPI(lifespan=workbench.router.lifespan_context)
         @app.get('/__test/skill-project')
         def project_path():

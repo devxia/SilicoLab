@@ -182,6 +182,17 @@ worker 的网络拒绝钩子只针对可信科学入口，不能代替不可信 
 .venv/bin/python -B tests/e2e/browser_workbench_availability.py
 ```
 
+## 原生关窗与独立后台
+
+[#20 原生后台契约](native-background.md) 将API/项目宿主移到独立服务；真实关闭NSWindow/WKWebView后GUI退出，已授权任务继续，重新打开附着原身份；重复打开不会产生第二写入者。完全退出入口独立，完整退出/逐项恢复矩阵仍归#21。
+
+```bash
+.venv/bin/python -B -m unittest discover -s backend/tests -p test_desktop_service.py -v
+.desktop-venv/bin/python -B tests/e2e/native_window_lifecycle.py
+```
+
+原生检查只用临时人工应用目录，真实Quartz窗口/进程与WKWebView来源证据位于忽略的outputs/native；不是浏览器内存模拟，也不代表正式安装包已验收。
+
 ## 常规检查
 
 ```bash

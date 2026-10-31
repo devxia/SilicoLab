@@ -51,6 +51,16 @@ node_modules/
 # Application model metadata (keys belong only in Keychain)
 model-configs.json
 model-configs-*.tmp
+# Native owner/control descriptors include local authorization tokens
+background.json
+background.lock
+gui-session.json
+workbench-selection.json
+background.json.*.tmp
+gui-session.json.*.tmp
+workbench-selection.json.*.tmp
+app.lock
+WebKit/
 
 .env
 .env.*

@@ -11,12 +11,15 @@ import LocalScienceForm from './LocalScienceForm';
 import './science.css';
 import ScientificResults from './ScientificResults';
 import SimulatedJobForm from './SimulatedJobForm';
+import DesktopLifecycle from './DesktopLifecycle';
 import SkillResources from './SkillResources';
 import ModelSettings, { type ModelConfiguration } from './ModelSettings';
 
+const nativeStartup = new URLSearchParams(window.location.search).get('silicolabDesktop') === '1';
 type WorkspaceTab = '文件' | '任务' | '结果';
 export default function Workbench() {
   const [projects, setProjects] = useState<ProjectIndex[]>([]);
+  const [nativeReady, setNativeReady] = useState(!nativeStartup);
   const [settings, setSettings] = useState(false);
   const [resources, setResources] = useState(false);
   const [modelConfigurations, setModelConfigurations] = useState<ModelConfiguration[]>([]);
@@ -42,9 +45,38 @@ export default function Workbench() {
   const selectedModelMissing = Boolean(chat?.modelConfigurationId && !modelConfigurations.some((item) => item.id === chat.modelConfigurationId));
   const inFlightRequest = conversation.state?.tasks.flatMap((task) => task.modelRequests || []).find((request) => request.status === 'running');
   const localDrafts = useRef(new Map<string, { draft: string; revision: number; saved: boolean }>());
+  const nativeSelectionWrites = useRef<Promise<unknown>>(Promise.resolve());
+  const restoredSelection = useRef(false);
   const sendIdentity = useRef<{ goal: string; id: string } | null>(null);
 
-  useEffect(() => { request<ProjectIndex[]>('/projects').then(setProjects).catch((e) => setError(e.message)); request<ModelConfiguration[]>('/model-configs').then(setModelConfigurations).catch(() => {}); }, []);
+  useEffect(() => {
+    let active = true;
+    async function attachSelection() {
+      try {
+        const items = await request<ProjectIndex[]>('/projects');
+        if (!active) return;
+        setProjects(items);
+        if (restoredSelection.current) return;
+        const api = nativeAPI();
+        if (nativeStartup && !api) return; // Cocoa injects the narrow bridge after navigation.
+        const bootstrap = api ? await api.bootstrap() : null;
+        if (active) setNativeReady(true);
+        const selected = bootstrap ? bootstrap.selection : JSON.parse(localStorage.getItem('silicolab-workbench-selection') || 'null') as { projectId: string; conversationId: string } | null;
+        if (!active || restoredSelection.current || !selected) return;
+        if (!items.some((item) => item.id === selected.projectId)) throw new Error('所选项目未关联');
+        const next = await request<Project>(`/projects/${selected.projectId}`);
+        if (!active || restoredSelection.current) return;
+        const chat = next.conversations.find((item) => item.id === selected.conversationId);
+        if (!chat) throw new Error('所选对话不可读取');
+        setProject(next); selectChat(chat, next.id);
+        restoredSelection.current = true;
+      } catch { if (active) setError('上次项目或对话暂不可附着，请从列表重新定位；未创建空会话或执行任务。'); }
+    }
+    void attachSelection();
+    window.addEventListener('pywebviewready', attachSelection);
+    request<ModelConfiguration[]>('/model-configs').then(setModelConfigurations).catch(() => {});
+    return () => { active = false; window.removeEventListener('pywebviewready', attachSelection); };
+  }, []);
   useEffect(() => {
     if (!project) return;
     let active = true;
@@ -95,11 +127,23 @@ export default function Workbench() {
     setProject((current) => current ? { ...current, conversations: current.conversations.map((item) => item.id === selected.id ? selected : item) } : current);
   }
   function selectChat(item?: Conversation, owner = project?.id, rebase = false) {
+    restoredSelection.current = true;
     if (project && conversationId) {
       const key = `${project.id}/${conversationId}`;
       const committed = localDrafts.current.get(key);
       if (!saved && !(committed?.saved && committed.draft === draft && committed.revision >= revision)) localDrafts.current.set(key, { draft, revision, saved });
       else if (saved) localDrafts.current.delete(key);
+    }
+    const selection = item && owner ? { projectId: owner, conversationId: item.id } : null;
+    const bridge = nativeAPI();
+    if (bridge?.save_selection) {
+      nativeSelectionWrites.current = nativeSelectionWrites.current.then(() => bridge.save_selection!(selection)).catch(() => setError('当前项目/对话选择尚未保存到应用，请重试选择；未宣称可恢复。'));
+    }
+    if (!nativeStartup && !bridge) {
+      try {
+        if (selection) localStorage.setItem('silicolab-workbench-selection', JSON.stringify(selection));
+        else localStorage.removeItem('silicolab-workbench-selection');
+      } catch { /* Browser preferences are optional, never native restore authority. */ }
     }
     const cached = item && owner ? localDrafts.current.get(`${owner}/${item.id}`) : undefined;
     setConversationId(item?.id || null); setDraft(cached ? cached.draft : item?.draft || '');
@@ -146,6 +190,7 @@ export default function Workbench() {
     if (selected) setPath(selected);
   }
 
+  if (!nativeReady) return <main className="wb-welcome" role="status"><h1>正在连接本机功能…</h1><p>尚未读取项目选择或运行任务。若连接未完成，请重新打开窗口。</p>{error && <p role="alert">{error}</p>}</main>;
   if (manual) return <><a className="wb-return" href="#">返回项目与对话</a><CodonWorkbench /></>;
   return <div className={`wb-shell ${expanded ? 'wb-expanded' : 'wb-collapsed'} ${tab ? 'wb-analysis-open' : ''}`}>
     {expanded && <button className="wb-scrim" aria-label="收起导航覆盖层" onClick={() => setExpanded(false)} />}
@@ -168,6 +213,7 @@ export default function Workbench() {
     </aside>
     <main className="wb-main">
       <header className="wb-header"><div><FolderOpen size={16} /><span>{project?.name || '选择一个科研项目'}</span><span className="wb-header-chat">/　{chat?.title || '对话'}</span></div><div>{(['文件', '任务', '结果'] as WorkspaceTab[]).map((item, index) => <button key={item} aria-label={`查看${item}`} aria-pressed={tab === item} onClick={() => analysis(item)}>{index === 0 ? <Files size={18} /> : index === 1 ? <ListChecks size={18} /> : <FileOutput size={18} />}</button>)}</div></header>
+      <DesktopLifecycle />
       {offline && <div role="alert" className="wb-error"><strong>项目目录离线</strong><p>{project?.availability?.reason}。只显示最后已观察状态；最新进度未确认保存。其他项目可继续使用。</p><button onClick={() => modal('relocate')}>重新定位原项目</button></div>}
       {error && <div role="alert" className="wb-error">{error}<button aria-label="关闭错误提示" onClick={() => setError('')}><X size={15} /></button></div>}
       {settings ? <ModelSettings onChange={setModelConfigurations} /> : resources ? <SkillResources projectId={project?.id} /> : <div className="wb-chat">

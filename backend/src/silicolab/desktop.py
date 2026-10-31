@@ -1,6 +1,9 @@
 """SilicoLab macOS application entry point (Cocoa + WKWebView)."""
 
+import argparse
 import fcntl
+import secrets
+import sys
 import json
 import logging
 from logging.handlers import RotatingFileHandler
@@ -16,8 +19,9 @@ import uuid
 import certifi
 import webview
 
-from silicolab.branding import APP_NAME, DATABASE_FILENAME
-from silicolab.paths import application_directory, read_preferences, write_preferences
+from silicolab.branding import APP_NAME
+from silicolab.desktop_lifecycle import atomic_json, ensure_service, gui_command, service_info, stop_service
+from silicolab.paths import application_directory
 
 
 class DesktopBridge:
@@ -43,7 +47,28 @@ class DesktopBridge:
             draft = json.loads(path.read_text())
         except (OSError, ValueError):
             draft = None
-        return {"desktop": True, "draft": draft}
+        return {"desktop": True, "draft": draft, "selection": self._load_selection()}
+
+    def _load_selection(self):
+        try:
+            value = json.loads((self._directory / "workbench-selection.json").read_text())
+            if value is None: return None
+            uuid.UUID(value["projectId"])
+            if not isinstance(value["conversationId"], str) or not value["conversationId"].isdigit(): return None
+            return {"projectId": value["projectId"], "conversationId": value["conversationId"]}
+        except (OSError, ValueError, KeyError, TypeError):
+            return None
+
+    def save_selection(self, selection):
+        self._trusted()
+        if selection is not None:
+            if not isinstance(selection, dict) or set(selection) != {"projectId", "conversationId"}:
+                raise ValueError("工作台选择只接受项目及对话身份")
+            uuid.UUID(selection["projectId"])
+            if not isinstance(selection["conversationId"], str) or not selection["conversationId"].isdigit() or len(selection["conversationId"]) > 30:
+                raise ValueError("对话身份不合法")
+        atomic_json(self._directory / "workbench-selection.json", selection)
+        return True
 
     def choose_project_directory(self):
         self._trusted()
@@ -104,7 +129,8 @@ class DesktopBridge:
             index += 1
             if index > 1000:
                 raise ValueError("同名导出文件过多，请清理下载目录")
-        job = self._app.state.store.get(job_id)
+        with urlopen(f'{self._origin}/api/jobs/{job_id}', timeout=10) as response:
+            job = json.load(response)
         records = job["records"]
         if record_id:
             records = [record for record in records if record["id"] == record_id]
@@ -137,10 +163,26 @@ class DesktopBridge:
     def _confirm_close(self):
         with self._lock:
             self._flush_draft()
-        active = self._app and self._app.state.store.active_count() > 0
-        if active:
-            return self._window.create_confirmation_dialog(
-                "退出 SilicoLab？", "当前还有未完成任务。退出后未完成项将在下次启动时标记为中断；已发送的远端请求无法撤回。")
+        return True
+
+    def desktop_status(self):
+        self._trusted()
+        info = service_info(self._directory)
+        return {"connected": bool(info), "backgroundPid": info["pid"] if info else None, "windowClose": "continues", "quit": "explicit"}
+
+    def reconnect_background(self):
+        self._trusted()
+        info = ensure_service(self._directory, isolated_resources=getattr(self, '_isolated_resources', False))
+        self._origin = info['origin']
+        self._window.load_url(self._origin + '/?silicolabDesktop=1')
+        return True
+
+    def quit_application(self):
+        self._trusted()
+        if not self._window.create_confirmation_dialog("完全退出 SilicoLab？", "完全退出会停止本机执行并保存可恢复状态；独立远端作业不会自动取消。关闭窗口则仅离开界面、后台继续。"):
+            return False
+        stop_service(self._directory)
+        self._window.destroy()
         return True
 
 
@@ -163,109 +205,129 @@ def configure_logs(directory):
         logger.propagate = False
 
 
-def bind_server(directory):
-    preferences = read_preferences(directory)
-    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    port = preferences.get("port", 0)
-    if not isinstance(port, int) or not 1024 <= port <= 65535:
-        port = 0
-    try:
-        listener.bind(("127.0.0.1", port))
-    except OSError:
-        listener.bind(("127.0.0.1", 0))
-    listener.listen(128)
-    listener.setblocking(False)
-    port = listener.getsockname()[1]
-    write_preferences(directory, preferences | {"port": port})
-    return listener, f"http://127.0.0.1:{port}"
-
-
-LOADING_SCREEN = """<!doctype html><html lang="zh-CN"><meta charset="utf-8"><style>
-body{margin:0;display:grid;place-items:center;height:100vh;background:#f6f6f6;color:#191919;
-font:15px -apple-system,BlinkMacSystemFont,sans-serif}main{text-align:center}
-h1{font-size:25px;font-weight:600}p{color:#888;font-size:12px}</style>
-<main><h1>SilicoLab</h1><p>正在准备本地工作台…</p></main></html>"""
-
-
-def main():
+def main(argv=None):
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    if '--background-service' in arguments:
+        from silicolab.desktop_service import main as service_main
+        return service_main([arg for arg in arguments if arg != '--background-service'])
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--quit', action='store_true', help='完全退出独立后台及窗口')
+    parser.add_argument('--close-window', action='store_true', help='真实关闭原生窗口，后台继续')
+    parser.add_argument('--isolated-resources', action='store_true', help='仅空资源目录，用于人工验收')
+    args = parser.parse_args(arguments)
     directory = application_directory()
+    if args.quit:
+        try:
+            stop_service(directory)
+        except ValueError as error:
+            logging.error('%s', error)
+            return 1
+        gui_command(directory, 'close')
+        return 0
+    if args.close_window:
+        return 0 if gui_command(directory, 'close') else 1
     configure_logs(directory)
-    os.environ.setdefault("SSL_CERT_FILE", certifi.where())
-    os.environ.setdefault("REQUESTS_CA_BUNDLE", certifi.where())
-    lock_file = (directory / "app.lock").open("a+")
+    os.environ.setdefault('SSL_CERT_FILE', certifi.where())
+    os.environ.setdefault('REQUESTS_CA_BUNDLE', certifi.where())
+    lock_file = (directory / 'app.lock').open('a+')
     try:
         fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
         lock_file.close()
-        logging.info("Another desktop instance is already running")
-        return 0
+        for _ in range(100):
+            if gui_command(directory, 'show'): return 0
+            time.sleep(0.05)
+        raise ValueError('已有窗口尚未就绪；未启动第二个窗口或后台')
+    info = ensure_service(directory, isolated_resources=args.isolated_resources)
     bridge = DesktopBridge(directory)
-    listener, origin = bind_server(directory)
-    bridge._origin = origin
-    runtime = {}
-    stop_requested = threading.Event()
-    boot_failed = threading.Event()
-
-    def serve():
-        try:
-            # Prepare the API concurrently with Cocoa/WebKit instead of blocking
-            # the main thread on FastAPI's imports before the window exists.
-            import uvicorn
-            from silicolab.server import create_app
-            app = create_app(db_path=directory / DATABASE_FILENAME)
-            bridge._app = app
-            server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=listener.getsockname()[1],
-                                                 loop="asyncio", http="h11", ws="none", log_config=None,
-                                                 access_log=False, timeout_graceful_shutdown=2))
-            runtime.update(app=app, server=server)
-            if stop_requested.is_set():
-                return
-            server.run(sockets=[listener])
-        except Exception:
-            logging.exception("Local API startup failed")
-            boot_failed.set()
-
-    thread = threading.Thread(target=serve, name="silicolab-api", daemon=True)
-    thread.start()
-    debug = os.environ.get("SILICOLAB_DESKTOP_DEBUG") == "1"
-    webview.settings["ALLOW_DOWNLOADS"] = True
-    webview.settings["OPEN_EXTERNAL_LINKS_IN_BROWSER"] = True
-    bridge._window = webview.create_window(APP_NAME, html=LOADING_SCREEN, width=1440, height=980,
-                                          min_size=(1000, 720), background_color="#f6f6f6", js_api=bridge)
+    bridge._isolated_resources = args.isolated_resources
+    bridge._origin = info['origin']
+    webview.settings['ALLOW_DOWNLOADS'] = True
+    webview.settings['OPEN_EXTERNAL_LINKS_IN_BROWSER'] = True
+    bridge._window = webview.create_window(APP_NAME, url=info['origin'] + '/?silicolabDesktop=1', width=1440, height=980,
+                                          min_size=(1000, 720), background_color='#f6f6f6', js_api=bridge)
     bridge._window.events.closing += bridge._confirm_close
+    control = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    control.bind(('127.0.0.1', 0)); control.listen(8); control.settimeout(0.2)
+    token, gui_id = secrets.token_urlsafe(32), str(uuid.uuid4())
+    descriptor = directory / 'gui-session.json'
+    stopped = threading.Event()
 
-    def open_workspace():
-        for _ in range(300):
-            if stop_requested.is_set():
-                return
-            server = runtime.get("server")
-            if server is not None and server.started:
-                logging.info("Desktop server ready at %s", origin)
-                bridge._window.load_url(origin)
-                return
-            if boot_failed.is_set():
-                break
-            time.sleep(.05)
-        bridge._window.load_html(LOADING_SCREEN.replace("正在准备本地工作台…", "启动未完成，请重新打开应用；详情见应用数据目录 desktop.log。"))
+    def close_window():
+        # pywebview's Cocoa destroy calls NSWindow.close on the main thread; it
+        # removes the actual WKWebView/window and stops the native event loop.
+        bridge._window.destroy()
 
+    def quit_all():
+        try:
+            stop_service(directory)
+        except ValueError:
+            show_error('后台未确认完全退出，窗口保持打开。请检查连接后重试。')
+            return
+        close_window()
+
+    def controls():
+        import hmac
+        while not stopped.is_set():
+            try:
+                connection, _ = control.accept()
+            except socket.timeout:
+                continue
+            except OSError:
+                return
+            with connection:
+                connection.settimeout(2)
+                try:
+                    raw = connection.makefile('rb').readline(4097)
+                    request = json.loads(raw) if len(raw) <= 4096 else {}
+                    accepted = hmac.compare_digest(str(request.get('token', '')), token) and request.get('operation') in ('show', 'close')
+                    connection.sendall(json.dumps({'accepted': accepted}).encode())
+                    if not accepted: continue
+                    if request['operation'] == 'close': close_window()
+                    else: bridge._window.restore(); bridge._window.show()
+                except (OSError, ValueError):
+                    pass
+
+    from AppKit import NSObject
+    from PyObjCTools import AppHelper
+    class SilicoLabLifecycleDelegate(NSObject):
+        def applicationShouldTerminate_(self, app):
+            try:
+                return bool(stop_service(directory) or service_info(directory) is None)
+            except Exception:
+                show_error('后台尚未确认退出，未停止应用；请重试“完全退出”。')
+                return False
+
+        def applicationSupportsSecureRestorableState_(self, app):
+            return True
+
+    def ready():
+        def install_delegate():
+            from webview.platforms.cocoa import BrowserView
+            delegate = SilicoLabLifecycleDelegate.alloc().init()
+            BrowserView.app.setDelegate_(delegate)
+            BrowserView._shared_app_delegate = delegate
+        AppHelper.callAfter(install_delegate)
+        atomic_json(descriptor, {'pid': os.getpid(), 'port': control.getsockname()[1], 'token': token, 'guiId': gui_id, 'backgroundPid': info['pid']})
+        threading.Thread(target=controls, name='silicolab-window-control', daemon=True).start()
+
+    from webview.menu import Menu, MenuAction
     try:
-        webview.start(open_workspace, gui="cocoa", debug=debug, private_mode=False, storage_path=str(directory / "WebKit"),
-                      localization={"global.ok": "确定", "global.cancel": "取消", "global.quitConfirmation": "确定退出？"})
+        webview.start(ready, gui='cocoa', debug=os.environ.get('SILICOLAB_DESKTOP_DEBUG') == '1',
+                      private_mode=False, storage_path=str(directory / 'WebKit'),
+                      menu=[Menu('工作台', [MenuAction('显示主窗口', lambda: bridge._window.show()),
+                                          MenuAction('关闭窗口（后台继续）', close_window),
+                                          MenuAction('完全退出 SilicoLab', quit_all)])],
+                      localization={'global.ok': '确定', 'global.cancel': '取消'})
     finally:
-        stop_requested.set()
-        if "app" in runtime and hasattr(runtime["app"].state, "loop"):
-            # End SSE before Uvicorn waits for open HTTP responses.
-            def stop_api_work():
-                runtime["app"].state.stopping.set()
-                runtime["app"].state.worker_task.cancel()
-            runtime["app"].state.loop.call_soon_threadsafe(stop_api_work)
-        if "server" in runtime:
-            runtime["server"].should_exit = True
-        thread.join(timeout=3)
-        listener.close()
-        fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
-        lock_file.close()
+        stopped.set(); control.close()
+        with bridge._lock: bridge._flush_draft()
+        try:
+            if json.loads(descriptor.read_text()).get('guiId') == gui_id: descriptor.unlink()
+        except (OSError, ValueError):
+            pass
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN); lock_file.close()
+        # The service is intentionally NOT stopped by window/event-loop teardown.
     return 0
 
 

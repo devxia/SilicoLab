@@ -1,0 +1,3 @@
+.wb-desktop-state { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 9px 22px; border-bottom: 1px solid #e1e1e1; color: #666; font-size: 12px; }
+.wb-desktop-state button { border: 1px solid #ddd; border-radius: 6px; padding: 5px 10px; background: #fff; color: #222; }
+.wb-desktop-state button:focus-visible { outline: 2px solid #222; outline-offset: 2px; }

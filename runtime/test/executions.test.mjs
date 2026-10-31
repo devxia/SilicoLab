@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { BACKGROUND_CONTEXT as ctx } from '@earendil-works/chord/context';
@@ -12,6 +12,9 @@ import { ExecutionOwner, ExecutionStores } from '../src/executions.ts';
 const options = () => ({ models: createModels(), registry: createRegistry() });
 async function directory(t) {
   const path = await mkdtemp(join(tmpdir(), 'silicolab-store-ownership-'));
+  await mkdir(join(path, '.silicolab'));
+  const project = await Harness.open(await openNodeSqliteStorage(join(path, '.silicolab/session.sqlite')), options(), ctx);
+  await project.root(ctx); await project.close(ctx);
   t.after(() => rm(path, { recursive: true, force: true }));
   return path;
 }

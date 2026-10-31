@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { ProjectAvailability } from './availability.ts';
 import { constants } from 'node:fs';
 import { lstat, mkdir, open, realpath, rm } from 'node:fs/promises';
 import { dirname, join, relative, resolve } from 'node:path';
@@ -12,9 +13,12 @@ const digest = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest(
 /** All paths are host-generated; never accept a file path from a model/client. */
 export class ProjectFiles {
   readonly project: string;
+  private guard: ProjectAvailability | undefined;
   constructor(project: string) { this.project = project; }
+  check() { this.guard ||= new ProjectAvailability(this.project); this.guard.check(); }
 
   async directory(path: string) {
+    this.check();
     let current = this.project;
     for (const part of path.split('/')) {
       current = join(current, part);
@@ -26,6 +30,7 @@ export class ProjectFiles {
   }
 
   async read(path: string) {
+    this.check();
     const target = resolve(this.project, path);
     const actual = await realpath(target);
     if (actual !== target || !relative(this.project, actual) || relative(this.project, actual).startsWith('..')) throw new Error('文件路径已改变或越出项目范围');
@@ -47,6 +52,7 @@ export class ProjectFiles {
   }
 
   async write(path: string, bytes: Uint8Array) {
+    this.check();
     await this.directory(relative(this.project, dirname(join(this.project, path))));
     const file = await open(join(this.project, path), 'wx', 0o600);
     try { await file.writeFile(bytes); await file.sync(); }

@@ -68,6 +68,7 @@ export function createLocalAgent(directory: string, getInputs: (id: string, conv
   };
   faux.setResponses([response]);
   models.setProvider({ ...faux.provider, ...requestProvider(async () => {
+    files.check();
     const task = (await tasks()).find((item) => item.id === activeTaskId);
     if (!task) throw new Error('请求未关联当前任务');
     const id = await getModelSelection(task.conversationId);
@@ -107,6 +108,7 @@ export function createLocalAgent(directory: string, getInputs: (id: string, conv
   }
   async function tracked(tool: string, input: string, parameters: unknown, api: ToolExecutionApi, context: Context,
     work: (task: ResearchTask, id: string, progress: (value: number, pythonPid?: number) => Promise<void>) => Promise<{ result: ExecutionResult; artifact?: Artifact; artifacts?: Artifact[]; isError?: boolean; error?: string }>) {
+    files.check();
     const live = await api.snapshot(LiveDoc, api.conversationId, ctx);
     if (live?.run?.inputs.length !== 1) throw new Error('工具无法关联唯一内核输入');
     const task = await taskForSubmission(api.conversationId, live.run.inputs[0]);
@@ -440,6 +442,7 @@ export function createLocalAgent(directory: string, getInputs: (id: string, conv
     return pumping;
   }
   async function launch(task: ResearchTask) {
+    files.check();
     if (task.workflow === 'protein_factory_remote') {
       const controller = new AbortController();
       const done = runRemote(task, controller.signal).catch(async (error) => {
@@ -722,6 +725,13 @@ export function createLocalAgent(directory: string, getInputs: (id: string, conv
       tasks: ownTasks, modelRequests: (await harness.snapshot(Ledger, ctx))?.modelRequests || 0,
       scheduling: (await inspection()).scheduling };
   }
-  return { models, registry, bind(value: Harness) { harness = value; }, start, tasks, conversation, cancel, artifact, answer, continueTask, reconcileOpen, preparePause, resume, inspection, closeExecutions, reconcileExternal, cancelExternal, reconcileScience,
+  return { models, registry, bind(value: Harness) { harness = value; files.check(); }, start, tasks, conversation, cancel, artifact, answer, continueTask, reconcileOpen, preparePause, resume, inspection, closeExecutions, reconcileExternal, cancelExternal, reconcileScience,
+    async verifyProject() {
+      for (const task of await tasks()) {
+        if (task.inputVersionId) await getInputs(task.inputVersionId, task.conversationId);
+        for (const execution of task.toolExecutions) if (execution.artifacts?.length || execution.artifact) await verifyCompleted(execution, '项目产物完整性不符，不能重新定位恢复');
+      }
+      return { verified: true };
+    },
     async modelRequests() { return (await harness.snapshot(Ledger, ctx))?.modelRequests || 0; } };
 }

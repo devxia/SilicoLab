@@ -105,7 +105,10 @@ class FakeModelEndpoint:
                 self.send_header('Content-Type', 'text/event-stream')
                 self.send_header('Content-Length', str(len(raw) + 1024 if current_mode == 'socket_drop' else len(raw)))
                 self.end_headers()
-                self.wfile.write(raw)
+                try:
+                    self.wfile.write(raw)
+                except (BrokenPipeError, ConnectionResetError):
+                    return
                 if current_mode == 'socket_drop':
                     import socket
                     self.wfile.flush()

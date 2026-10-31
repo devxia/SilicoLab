@@ -172,6 +172,16 @@ worker 的网络拒绝钩子只针对可信科学入口，不能代替不可信 
 
 单测app_fixture与浏览器夹具显式注入空或人工skill roots，不能依赖个人资源；正式默认发现路径见契约，不读取其他agent认证或模型设置。
 
+## 项目目录离线与重新定位
+
+[#19 目录可用性契约](project-availability.md) 在移动、断开或不可写时停止受影响宿主，不创建替代项目；界面明确最新进度未确认保存。用户重新定位需核对UUID、固定输入和产物，仍逐项恢复；移除仅取消应用关联，保留目录。
+
+```bash
+.venv/bin/python -B -m unittest discover -s backend/tests -p test_project_availability.py -v
+# 普通8767工作台夹具
+.venv/bin/python -B tests/e2e/browser_workbench_availability.py
+```
+
 ## 常规检查
 
 ```bash

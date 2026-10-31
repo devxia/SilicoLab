@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { dirname, join, resolve } from 'node:path';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import { createLocalAgent } from './agent.ts';
+import { ProjectAvailability } from './availability.ts';
 import { SkillCatalog, type SkillRoot } from './skills.ts';
 import { closeModels } from './model-configuration.ts';
 import { closeScience, type ScienceOptions } from './science.ts';
@@ -40,7 +41,11 @@ agent.bind(harness);
 durable = harness;
 const existing = await harness.snapshot(Project, ctx);
 if (!existing && mode !== 'create') { await harness.close(ctx); throw new Error('project identity missing'); }
+if (existing && process.env.SILICOLAB_EXPECTED_PROJECT && existing.id !== process.env.SILICOLAB_EXPECTED_PROJECT) { await harness.close(ctx); throw new Error('项目身份不符；未恢复或修改此项目'); }
 await harness.commit((tx) => tx.doc(Project), ctx);
+const availability = new ProjectAvailability(dirname(resolve(directory)));
+const availabilityTimer = setInterval(() => { try { availability.check(); } catch { process.exit(75); } }, 75);
+availabilityTimer.unref();
 await agent.reconcileOpen();
 
 async function snapshot() {
@@ -57,9 +62,15 @@ async function chatId(value: unknown) {
 }
 let stopAfterResponse = false;
 async function dispatch(request: Record<string, unknown>) {
+  availability.check();
   switch (request.op) {
     case 'status': return snapshot();
     case 'skills.list': return skills.list();
+    case 'project.verify': {
+      const project = (await harness.snapshot(Project, ctx))!;
+      for (const version of project.inputVersions || []) await files.fixed(version);
+      return agent.verifyProject();
+    }
     case 'conversation.create': {
       const title = String(request.title || '').trim();
       if (!title || title.length > 200) throw new Error('对话标题长度应为 1–200 字符');
@@ -179,4 +190,4 @@ try {
       if (request.op === 'close' || stopAfterResponse) break;
     } catch (error) { console.log(JSON.stringify({ id, error: String(error) })); }
   }
-} finally { await agent.closeExecutions(); await harness.close(ctx); closeScience(); closeModels(); lines.close(); }
+} finally { clearInterval(availabilityTimer); await agent.closeExecutions(); await harness.close(ctx); closeScience(); closeModels(); lines.close(); }

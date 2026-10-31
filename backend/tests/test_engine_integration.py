@@ -14,7 +14,7 @@ from openpyxl import load_workbook
 
 from silicolab.features.codon import client as codon
 from silicolab.features.codon.engines import engine_metadata
-from silicolab.server import create_app
+from app_fixture import create_app
 
 
 class EngineIntegrationTests(unittest.TestCase):

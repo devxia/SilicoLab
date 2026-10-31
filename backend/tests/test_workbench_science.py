@@ -10,7 +10,7 @@ import unittest
 from fastapi.testclient import TestClient
 from openpyxl import load_workbook
 from silicolab.features.codon.client import validate_result
-from silicolab.server import create_app
+from app_fixture import create_app
 
 
 def wait_task(client, url, chat, identity):

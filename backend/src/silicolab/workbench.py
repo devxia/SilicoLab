@@ -73,7 +73,7 @@ class DraftInput(BaseModel):
 
 
 class ProjectHost:
-    def __init__(self, path, create, name, simulated, model_configuration):
+    def __init__(self, path, create, name, simulated, model_configuration, skill_roots=None):
         self.path = Path(path).resolve(strict=True)
         if not self.path.is_dir():
             raise ValueError('请选择存在的项目目录')
@@ -105,6 +105,14 @@ class ProjectHost:
             from silicolab.model_configuration import ModelCredentialChannel
             self._credentials = ModelCredentialChannel(model_configuration)
             env['SILICOLAB_MODEL_FD'] = str(self._credentials.client.fileno())
+            if skill_roots is None:
+                skill_sources = [{'path': str(self.path / folder), 'anchor': str(self.path), 'source': 'project:' + folder} for folder in ('.agents/skills', '.claude/skills', '.pi/skills')]
+                home = Path.home()
+                skill_sources += [{'path': str(home / folder), 'anchor': str(home), 'source': 'user:~/' + folder} for folder in ('.agents/skills', '.claude/skills', '.pi/agent/skills')]
+            else:
+                skill_sources = [{'path': str(self.path / '.agents/skills'), 'anchor': str(self.path), 'source': 'project:.agents/skills'}]
+                skill_sources += [{'path': str(Path(folder).resolve()), 'anchor': str(Path(folder).resolve()), 'source': f'test:skills-{index}'} for index, folder in enumerate(skill_roots)]
+            env['SILICOLAB_SKILL_ROOTS'] = json.dumps(skill_sources)
             science_env = {'PATH': '/usr/bin:/bin', 'LANG': 'en_US.UTF-8'}
             for key in ('SILICOLAB_SCIENCE_REMOTE', 'SILICOLAB_SCIENCE_REMOTE_TIMEOUT'):
                 if os.environ.get(key):
@@ -226,7 +234,7 @@ class Workbench:
             if fresh:
                 if len(self._hosts) >= 4:
                     raise ValueError('当前最多打开4个项目宿主；请结束并重新打开应用选择项目')
-                host = ProjectHost(canonical, create, name, self.simulated(), self.model_configuration)
+                host = ProjectHost(canonical, create, name, self.simulated(), self.model_configuration, self.skill_roots)
                 self._hosts[canonical] = host
             try:
                 snapshot = host.call('status')
@@ -351,6 +359,10 @@ def router(workbench):
     @routes.get('/simulated-executor')
     def simulated_executor_status():
         return workbench.simulated().info()
+
+    @routes.get('/projects/{project_id}/resources/skills')
+    def list_skills(project_id: str):
+        return invoke(workbench.call, project_id, 'skills.list')
 
     @routes.get('/model-configs')
     def model_configs():

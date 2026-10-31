@@ -160,6 +160,18 @@ worker 的网络拒绝钩子只针对可信科学入口，不能代替不可信 
 .venv/bin/python -B tests/e2e/browser_workbench_model_requests.py
 ```
 
+## Skills 资源目录与按需读取
+
+[#17 资源契约](skill-resources.md) 公开固定约定roots、frontmatter子集、同名优先级与不兼容规则。左侧技能资源与Node实际read_skill工具共用目录，初始只有描述、正文按需，加载记录包含真实来源/哈希；文字不增加任务权限。
+
+```bash
+.venv/bin/python -B -m unittest discover -s backend/tests -p test_skill_resources.py -v
+.venv/bin/python -B tests/e2e/fixtures/skills_workbench_fixture.py
+.venv/bin/python -B tests/e2e/browser_workbench_skills.py
+```
+
+单测app_fixture与浏览器夹具显式注入空或人工skill roots，不能依赖个人资源；正式默认发现路径见契约，不读取其他agent认证或模型设置。
+
 ## 常规检查
 
 ```bash

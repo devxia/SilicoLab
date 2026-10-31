@@ -11,5 +11,5 @@ if __name__ == '__main__':
     with tempfile.TemporaryDirectory(prefix='silicolab-workbench-server-') as directory:
         def no_remote(_payload):
             raise RuntimeError('External scientific calls are forbidden in this fixture')
-        app = create_app(Path(directory) / 'app.sqlite3', optimizer=no_remote, delay=0)
+        app = create_app(Path(directory) / 'app.sqlite3', optimizer=no_remote, delay=0, skill_roots=[])
         uvicorn.run(app, host='127.0.0.1', port=8767, log_level='warning')

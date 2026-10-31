@@ -344,7 +344,7 @@ class Worker:
         self.store.mutate(job_id, finish_job)
 
 
-def create_app(db_path=None, optimizer=None, delay=0.5, credential_store=None):
+def create_app(db_path=None, optimizer=None, delay=0.5, credential_store=None, skill_roots=None):
     database = db_path or browser_database()
     store = Store(database)
     worker = Worker(store, optimizer or default_optimizer, delay)
@@ -353,6 +353,7 @@ def create_app(db_path=None, optimizer=None, delay=0.5, credential_store=None):
     model_configuration = ModelConfiguration(Path(database).with_name('model-configs.json'), credential_store)
     workbench = Workbench(Path(database).with_name('projects.json'))
     workbench.model_configuration = model_configuration
+    workbench.skill_roots = skill_roots
 
     @asynccontextmanager
     async def lifespan(app):

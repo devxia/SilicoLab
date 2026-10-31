@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 
 from silicolab.features.codon import client as codon
 from silicolab.features.codon.transport import optimize_remote
-from silicolab.server import create_app
+from app_fixture import create_app
 
 
 class TransportTests(unittest.IsolatedAsyncioTestCase):

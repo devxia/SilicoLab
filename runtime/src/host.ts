@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { dirname, join, resolve } from 'node:path';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import { createLocalAgent } from './agent.ts';
+import { SkillCatalog, type SkillRoot } from './skills.ts';
 import { closeModels } from './model-configuration.ts';
 import { closeScience, type ScienceOptions } from './science.ts';
 import { defineDoc, Harness, type ConversationId } from '@earendil-works/pi-durable';
@@ -23,13 +24,14 @@ const Chat = defineDoc<{ title: string; draft: string; revision: number; modelCo
   initial: () => ({ title: '新对话', draft: '', revision: 0 }), checkpointWhen: () => true,
 });
 const files = new ProjectFiles(dirname(resolve(directory)));
+const skills = new SkillCatalog(JSON.parse(process.env.SILICOLAB_SKILL_ROOTS || '[]') as SkillRoot[]);
 let durable: Harness;
 const agent = createLocalAgent(dirname(resolve(directory)), async (versionId, conversationId) => {
   const project = (await durable.snapshot(Project, ctx))!;
   const version = project.inputVersions?.find((input) => input.id === versionId && input.conversationId === conversationId);
   if (!version) throw new Error('当前对话没有该固定输入版本');
   return files.fixed(version);
-}, async (conversationId) => (await durable.snapshot(Chat, Number(conversationId) as ConversationId, ctx))?.modelConfigurationId);
+}, async (conversationId) => (await durable.snapshot(Chat, Number(conversationId) as ConversationId, ctx))?.modelConfigurationId, skills);
 const harness = await Harness.open(await openNodeSqliteStorage(join(resolve(directory), 'session.sqlite')), {
   models: agent.models, registry: agent.registry,
   settings: { compaction: { enabled: false }, retry: { maxRetries: 0 }, restartLimit: 3, progress: { partialIntervalMs: 30, outputIntervalMs: 30 } },
@@ -57,6 +59,7 @@ let stopAfterResponse = false;
 async function dispatch(request: Record<string, unknown>) {
   switch (request.op) {
     case 'status': return snapshot();
+    case 'skills.list': return skills.list();
     case 'conversation.create': {
       const title = String(request.title || '').trim();
       if (!title || title.length > 200) throw new Error('对话标题长度应为 1–200 字符');

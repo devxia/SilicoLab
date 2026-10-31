@@ -15,7 +15,7 @@ import zipfile
 
 from fastapi.testclient import TestClient
 from openpyxl import load_workbook
-from silicolab.server import create_app
+from app_fixture import create_app
 from test_workbench_science import wait_task
 from test_workbench_recovery import wait_state
 

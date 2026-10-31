@@ -8,7 +8,7 @@ import time
 import unittest
 
 from fastapi.testclient import TestClient
-from silicolab.server import create_app
+from app_fixture import create_app
 from test_workbench_science import wait_task
 
 

@@ -8,7 +8,7 @@ import zipfile
 from fastapi.testclient import TestClient
 from openpyxl import Workbook, load_workbook
 
-from silicolab.server import create_app
+from app_fixture import create_app
 from silicolab.features.codon.spreadsheets import SpreadsheetError, inspect_table, synthesis_workbook
 
 ROOT = Path(__file__).resolve().parent

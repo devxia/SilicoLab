@@ -7,7 +7,7 @@ import tempfile
 import unittest
 
 from fastapi.testclient import TestClient
-from silicolab.server import create_app
+from app_fixture import create_app
 from test_workbench_science import wait_task
 from test_workbench_recovery import wait_state
 
@@ -24,7 +24,7 @@ class MemorySecrets:
 
 
 class FakeModelEndpoint:
-    def __init__(self, protocol, key, mode='normal', tool_name='synthetic_count'):
+    def __init__(self, protocol, key, mode='normal', tool_name='synthetic_count', tool_arguments=None):
         self.tool_name = tool_name
         self.protocol, self.key, self.mode = protocol, key, mode
         self.requests = []
@@ -62,7 +62,12 @@ class FakeModelEndpoint:
                 returned_tool_result = any(item.get('type') == 'function_call_output' for item in data.get('input', []) if isinstance(item, dict)) or any(block.get('type') == 'tool_result' for item in data.get('messages', []) for block in item.get('content', []) if isinstance(block, dict))
                 if current_mode == 'duplicate_once':
                     returned_tool_result = False
-                arguments = {'text': 'ABC'} if tool_name == 'synthetic_count' else {}
+                chosen_tool = tool_name
+                if current_mode == 'skill_scope_attack' and len(endpoint.requests) <= 2:
+                    returned_tool_result = False
+                    if len(endpoint.requests) == 2:
+                        chosen_tool = 'protein_factory_remote'
+                arguments = tool_arguments if tool_arguments is not None else {'text': 'ABC'} if tool_name == 'synthetic_count' else {}
                 if current_mode in ('long_original', 'duplicate_changed'):
                     arguments = {'text': 'P' * 160 + ('A' if current_mode == 'long_original' else 'B')}
                     if current_mode == 'duplicate_changed':
@@ -75,14 +80,14 @@ class FakeModelEndpoint:
                 if protocol == 'openai-responses':
                     response = {'id': 'resp_artificial', 'object': 'response', 'status': 'completed', 'output': [], 'usage': {'input_tokens': 4, 'output_tokens': 3, 'total_tokens': 7}}
                     if data.get('tools') and not returned_tool_result:
-                        item = {'id': 'fc_artificial', 'type': 'function_call', 'call_id': 'call_artificial', 'name': tool_name, 'arguments': json.dumps(arguments), 'status': 'completed'}
+                        item = {'id': 'fc_artificial', 'type': 'function_call', 'call_id': 'call_artificial', 'name': chosen_tool, 'arguments': json.dumps(arguments), 'status': 'completed'}
                     else:
                         item = {'id': 'msg_artificial', 'type': 'message', 'role': 'assistant', 'status': 'completed', 'content': [{'type': 'output_text', 'text': reply, 'annotations': []}]}
                     response['output'] = [item]
                     events = [{'type': 'response.created', 'response': response}, {'type': 'response.output_item.added', 'output_index': 0, 'item': item}, {'type': 'response.output_item.done', 'output_index': 0, 'item': item}, {'type': 'response.completed', 'response': response}]
                 else:
                     tool = bool(data.get('tools')) and not returned_tool_result
-                    block = {'type': 'tool_use', 'id': 'toolu_artificial', 'name': tool_name, 'input': arguments} if tool else {'type': 'text', 'text': reply}
+                    block = {'type': 'tool_use', 'id': 'toolu_artificial', 'name': chosen_tool, 'input': arguments} if tool else {'type': 'text', 'text': reply}
                     events = [{'type': 'message_start', 'message': {'id': 'msg_artificial', 'type': 'message', 'role': 'assistant', 'model': 'artificial-model', 'content': [], 'usage': {'input_tokens': 4, 'output_tokens': 0}, 'stop_reason': None, 'stop_sequence': None}}, {'type': 'content_block_start', 'index': 0, 'content_block': block}, {'type': 'content_block_stop', 'index': 0}, {'type': 'message_delta', 'delta': {'stop_reason': 'tool_use' if tool else 'end_turn', 'stop_sequence': None}, 'usage': {'output_tokens': 3}}, {'type': 'message_stop'}]
                     if tool:
                         events.insert(2, {'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'input_json_delta', 'partial_json': json.dumps(arguments)}})

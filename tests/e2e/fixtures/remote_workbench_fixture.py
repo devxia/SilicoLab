@@ -15,7 +15,7 @@ if __name__ == '__main__':
         os.environ['SILICOLAB_SCIENCE_REMOTE'] = remote.url
         def no_legacy_remote(_payload):
             raise RuntimeError('Legacy science jobs forbidden in this fixture')
-        workbench = create_app(Path(directory) / 'app.sqlite3', optimizer=no_legacy_remote, delay=0)
+        workbench = create_app(Path(directory) / 'app.sqlite3', optimizer=no_legacy_remote, delay=0, skill_roots=[])
         app = FastAPI(lifespan=workbench.router.lifespan_context)
         @app.get('/__test/science-requests')
         def requests():

@@ -6,7 +6,7 @@ import tempfile
 import unittest
 
 from fastapi.testclient import TestClient
-from silicolab.server import create_app
+from app_fixture import create_app
 from test_model_configuration import FakeModelEndpoint, MemorySecrets
 from test_workbench_recovery import wait_state
 from test_workbench_science import wait_task

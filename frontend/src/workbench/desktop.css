@@ -1,3 +1,8 @@
+.wb-recovery-items { padding: 10px 22px; border-bottom: 1px solid #e1e1e1; font-size: 12px; }
+.wb-recovery-items p { max-width: 80ch; color: #666; line-height: 1.7; }
+.wb-recovery-items ul { list-style: none; padding: 0; display: grid; gap: 8px; }
+.wb-recovery-items li { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; }
+.wb-recovery-items button { border: 1px solid #ddd; border-radius: 6px; background: #fff; padding: 5px 10px; }
 .wb-desktop-state { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 9px 22px; border-bottom: 1px solid #e1e1e1; color: #666; font-size: 12px; }
 .wb-desktop-state button { border: 1px solid #ddd; border-radius: 6px; padding: 5px 10px; background: #fff; color: #222; }
 .wb-desktop-state button:focus-visible { outline: 2px solid #222; outline-offset: 2px; }

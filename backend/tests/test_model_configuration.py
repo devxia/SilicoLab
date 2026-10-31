@@ -41,11 +41,12 @@ class FakeModelEndpoint:
                 if current_mode == 'hold':
                     endpoint.entered.set()
                     endpoint.release.wait(6)
-                if current_mode in ('rate_limit', 'server_error'):
-                    self.send_response(429 if current_mode == 'rate_limit' else 503)
+                if current_mode in ('rate_limit', 'server_error', 'rate_limit_auth_digits'):
+                    self.send_response(429 if current_mode in ('rate_limit', 'rate_limit_auth_digits') else 503)
                     self.send_header('Content-Type', 'application/json')
                     self.end_headers()
-                    self.wfile.write(b'{"error":{"message":"temporary service error"}}')
+                    message = 'artificial request 401-403 reference; temporarily limited' if current_mode == 'rate_limit_auth_digits' else 'temporary service error'
+                    self.wfile.write(json.dumps({'error':{'message':message}}).encode())
                     return
                 if current_mode == 'invalid_key':
                     self.send_response(401)

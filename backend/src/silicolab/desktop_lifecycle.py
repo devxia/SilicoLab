@@ -69,9 +69,9 @@ def ensure_service(directory, *, isolated_resources=False):
     raise ValueError('独立后台尚未就绪；未宣称任务继续，请检查日志后重开')
 
 
-def service_has_owner(directory):
-    """Lease, not an untrusted/stale PID, proves that some background owner remains."""
-    lease = (Path(directory) / 'background.lock').open('a+')
+def _has_owner(directory, filename):
+    """Lease, not an untrusted/stale PID, proves that an application owner remains."""
+    lease = (Path(directory) / filename).open('a+')
     try:
         try:
             fcntl.flock(lease.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -81,6 +81,20 @@ def service_has_owner(directory):
         return False
     finally:
         lease.close()
+
+
+def service_has_owner(directory):
+    return _has_owner(directory, 'background.lock')
+
+
+def close_gui(directory):
+    deadline = time.monotonic() + 15
+    while _has_owner(directory, 'app.lock'):
+        gui_command(directory, 'close')
+        if time.monotonic() >= deadline:
+            raise ValueError('后台已停止，但原生窗口尚未释放；未确认完全退出')
+        time.sleep(0.1)
+    return True
 
 
 def stop_service(directory):

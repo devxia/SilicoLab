@@ -193,6 +193,18 @@ worker 的网络拒绝钩子只针对可信科学入口，不能代替不可信 
 
 原生检查只用临时人工应用目录，真实Quartz窗口/进程与WKWebView来源证据位于忽略的outputs/native；不是浏览器内存模拟，也不代表正式安装包已验收。
 
+## 完全退出与逐项恢复
+
+[#21 完全退出契约](full-quit-recovery.md) 综合多项目脚本/排队/必要决定、真实PID回收、独立外部假job及全新进程恢复场景。项目顶部列表只定位原待处理任务，不自动执行；关闭窗口与完全退出保持不同。
+
+```bash
+.venv/bin/python -B -m unittest discover -s backend/tests -p test_full_quit_recovery.py -v
+.venv/bin/python -B tests/e2e/browser_workbench_full_quit.py
+.desktop-venv/bin/python -B tests/e2e/native_full_quit.py
+```
+
+需预装已验证分析runtime；重启恢复场景通过结束全部受管进程再新服务读取持久化演练，不擅自重启OS、不宣称断电零丢失。
+
 ## 常规检查
 
 ```bash

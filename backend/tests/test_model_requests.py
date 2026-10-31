@@ -43,7 +43,7 @@ class ModelRequestTests(unittest.TestCase):
                 self.assertIn('characters', json.dumps(second.requests[0]['body']))
 
     def test_transient_and_stream_errors_retry_only_model_not_completed_tool(self):
-        for failure in ('rate_limit', 'server_error', 'disconnect', 'socket_drop'):
+        for failure in ('rate_limit', 'rate_limit_auth_digits', 'server_error', 'disconnect', 'socket_drop'):
             with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory, FakeModelEndpoint('openai-responses', 'artificial-retry', ['normal', failure, 'normal']) as endpoint:
                 root = Path(directory)
                 with TestClient(create_app(root / 'app.sqlite3', delay=0, credential_store=MemorySecrets())) as client:

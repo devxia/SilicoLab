@@ -20,7 +20,7 @@ import certifi
 import webview
 
 from silicolab.branding import APP_NAME
-from silicolab.desktop_lifecycle import atomic_json, ensure_service, gui_command, service_info, stop_service
+from silicolab.desktop_lifecycle import atomic_json, close_gui, ensure_service, gui_command, service_info, stop_service
 from silicolab.paths import application_directory
 
 
@@ -219,10 +219,10 @@ def main(argv=None):
     if args.quit:
         try:
             stop_service(directory)
+            close_gui(directory)
         except ValueError as error:
             logging.error('%s', error)
             return 1
-        gui_command(directory, 'close')
         return 0
     if args.close_window:
         return 0 if gui_command(directory, 'close') else 1

@@ -56,11 +56,13 @@ export function configuredProvider(config: ModelConfiguration, observeUsage?: (u
     if (url.origin !== endpoint.origin || !(url.pathname === endpoint.pathname || url.pathname.startsWith(endpoint.pathname.replace(/\/$/, '') + '/'))) throw new Error('模型接收方与所选端点不符');
     return fetch(input, { ...options, redirect: 'error' });
   };
-  function failureMessage(value: unknown, sawProtocolEvent: boolean) {
+  function failureMessage(value: unknown, sawProtocolEvent: boolean, status?: number) {
     const message = String(value);
-    if (/401|403|authentication_error|invalid_api_key/i.test(message)) return '所选模型凭据无效（401/403）；请更新 API key，未自动切换接收方';
-    if (/429|rate_limit|too many requests/i.test(message)) return '模型限流（429）；未自动切换接收方';
-    if (/500|502|503|504|overloaded|service unavailable/i.test(message)) return '模型服务暂时不可用（503）；未自动切换接收方';
+    if (status === 401 || status === 403) return '所选模型凭据无效（401/403）；请更新 API key，未自动切换接收方';
+    if (status === 429) return '模型限流（429）；未自动切换接收方';
+    if (status !== undefined && status >= 500 && status <= 599) return '模型服务暂时不可用（5xx）；未自动切换接收方';
+    if (status === undefined && /authentication_error|invalid_api_key/i.test(message)) return '所选模型凭据无效；请更新 API key，未自动切换接收方';
+    if (status === undefined && /rate_limit|too many requests/i.test(message)) return '模型限流；未自动切换接收方';
     if (/stream ended before|terminal response|message_stop/i.test(message)) return sawProtocolEvent ? '模型断流：响应不完整；未自动切换接收方' : '所选端点协议不兼容；未自动切换接收方';
     if (/terminated|socket|UND_ERR|timeout|timed out|ECONNRESET|ECONNREFUSED|connection error|fetch failed/i.test(message)) return '模型暂时网络错误；未自动切换接收方';
     if (/invalid json|unexpected token|parse|protocol/i.test(message)) return '所选端点协议不兼容或响应不完整；请核对协议，未自动切换接收方';
@@ -76,6 +78,12 @@ export function configuredProvider(config: ModelConfiguration, observeUsage?: (u
     const output = createAssistantMessageEventStream();
     void (async () => {
       let sawProtocolEvent = false;
+      let httpStatus: number | undefined;
+      const requestFetch: typeof fetch = async (input, init) => {
+        const response = await safeFetch(input, init);
+        httpStatus = response.status;
+        return response;
+      };
       try {
         const onProviderStreamEvent = (event: unknown) => {
           const raw = event as { type?: string; response?: { usage?: Record<string, unknown> }; message?: { usage?: Record<string, unknown> }; usage?: Record<string, unknown> };
@@ -90,13 +98,13 @@ export function configuredProvider(config: ModelConfiguration, observeUsage?: (u
           if (typeof details?.cached_tokens === 'number') known.cacheRead = details.cached_tokens;
           observeUsage?.(known);
         };
-        const safeOptions = { ...options, fetch: safeFetch, maxRetries: 0, timeoutMs: 30000, transport: 'sse' as const, onProviderStreamEvent, onPayload: undefined, onResponse: undefined };
+        const safeOptions = { ...options, fetch: requestFetch, maxRetries: 0, timeoutMs: 30000, transport: 'sse' as const, onProviderStreamEvent, onPayload: undefined, onResponse: undefined };
         const events = method === 'streamSimple'
           ? adapter!.streamSimple(requested, context, safeOptions as SimpleStreamOptions)
           : adapter!.stream(requested, context, safeOptions);
         for await (const event of events) {
           const sanitized = clean(event) as AssistantMessageEvent;
-          if (sanitized.type === 'error' && event.type === 'error') sanitized.error.errorMessage = failureMessage(event.error.errorMessage, sawProtocolEvent);
+          if (sanitized.type === 'error' && event.type === 'error') sanitized.error.errorMessage = failureMessage(event.error.errorMessage, sawProtocolEvent, httpStatus);
           output.push(sanitized);
         }
         output.end(clean(await events.result()) as Awaited<ReturnType<typeof events.result>>);

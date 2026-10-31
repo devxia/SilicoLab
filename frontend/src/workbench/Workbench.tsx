@@ -13,6 +13,7 @@ import ScientificResults from './ScientificResults';
 import SimulatedJobForm from './SimulatedJobForm';
 import PythonAnalysisForm from './PythonAnalysisForm';
 import AnalysisResults from './AnalysisResults';
+import RecoveryItems from './RecoveryItems';
 import DesktopLifecycle from './DesktopLifecycle';
 import SkillResources from './SkillResources';
 import ModelSettings, { type ModelConfiguration } from './ModelSettings';
@@ -22,6 +23,7 @@ type WorkspaceTab = '文件' | '任务' | '结果';
 export default function Workbench() {
   const [projects, setProjects] = useState<ProjectIndex[]>([]);
   const [nativeReady, setNativeReady] = useState(!nativeStartup);
+  const [taskTarget, setTaskTarget] = useState<{ projectId: string; conversationId: string; taskId: string } | null>(null);
   const [settings, setSettings] = useState(false);
   const [resources, setResources] = useState(false);
   const [modelConfigurations, setModelConfigurations] = useState<ModelConfiguration[]>([]);
@@ -86,7 +88,7 @@ export default function Workbench() {
     const observedPath = project.path;
     const timer = window.setInterval(() => {
       request<Project>(`/projects/${identity}`).then((next) => {
-        if (active) setProject((current) => current?.id === identity && current.path === observedPath ? { ...current, availability: next.availability } : current);
+        if (active) setProject((current) => current?.id === identity && current.path === observedPath ? { ...current, availability: next.availability, tasks: next.tasks } : current);
       }).catch(() => {});
     }, 500);
     return () => { active = false; window.clearInterval(timer); };
@@ -95,6 +97,11 @@ export default function Workbench() {
     const update = () => setManual(window.location.hash === '#manual');
     window.addEventListener('hashchange', update); return () => window.removeEventListener('hashchange', update);
   }, []);
+  useEffect(() => {
+    if (!taskTarget || settings || resources || project?.id !== taskTarget.projectId || conversationId !== taskTarget.conversationId || conversation.state?.conversationId !== taskTarget.conversationId) return;
+    const card = [...document.querySelectorAll<HTMLElement>('.wb-transcript [data-task-id]')].find((element) => element.dataset.taskId === taskTarget.taskId);
+    if (card) { card.scrollIntoView({ block: 'center' }); card.focus({ preventScroll: true }); setTaskTarget(null); }
+  }, [taskTarget, settings, resources, project?.id, conversationId, conversation.state]);
   useEffect(() => {
     if (!dialog) return;
     returnFocus.current = document.activeElement as HTMLElement;
@@ -216,6 +223,16 @@ export default function Workbench() {
     <main className="wb-main">
       <header className="wb-header"><div><FolderOpen size={16} /><span>{project?.name || '选择一个科研项目'}</span><span className="wb-header-chat">/　{chat?.title || '对话'}</span></div><div>{(['文件', '任务', '结果'] as WorkspaceTab[]).map((item, index) => <button key={item} aria-label={`查看${item}`} aria-pressed={tab === item} onClick={() => analysis(item)}>{index === 0 ? <Files size={18} /> : index === 1 ? <ListChecks size={18} /> : <FileOutput size={18} />}</button>)}</div></header>
       <DesktopLifecycle />
+      {project && <RecoveryItems project={project} onSelect={(id, taskId) => perform(async () => {
+        if (!offline) await saveDraft();
+        const refreshed=await request<Project>(`/projects/${project.id}`);
+        const original=refreshed.conversations.find((item)=>item.id===id);
+        if (!original) throw new Error('原任务对话不可访问；未新建替代对话');
+        if (!refreshed.tasks.some((task) => task.id === taskId && task.conversationId === id)) throw new Error('原任务身份不可核对，未定位替代任务');
+        setSettings(false); setResources(false);
+        setProject(refreshed);selectChat(original,refreshed.id);
+        setTaskTarget({projectId:refreshed.id,conversationId:id,taskId});
+      })} />}
       {offline && <div role="alert" className="wb-error"><strong>项目目录离线</strong><p>{project?.availability?.reason}。只显示最后已观察状态；最新进度未确认保存。其他项目可继续使用。</p><button onClick={() => modal('relocate')}>重新定位原项目</button></div>}
       {error && <div role="alert" className="wb-error">{error}<button aria-label="关闭错误提示" onClick={() => setError('')}><X size={15} /></button></div>}
       {settings ? <ModelSettings onChange={setModelConfigurations} /> : resources ? <SkillResources projectId={project?.id} /> : <div className="wb-chat">

@@ -19,6 +19,7 @@ export class ProjectFiles {
 
   async directory(path: string) {
     this.check();
+    if (!path || path.startsWith('/') || path.split('/').some(part => !part || part === '.' || part === '..' || /[\\\x00-\x1f]/.test(part))) throw new Error('项目目录路径越界或不合法');
     let current = this.project;
     for (const part of path.split('/')) {
       current = join(current, part);

@@ -1,3 +1,5 @@
+import { lstat, realpath } from 'node:fs/promises';
+import { join } from 'node:path';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import { defineDoc, Harness, type HarnessOptions } from '@earendil-works/pi-durable';
 import { openNodeSqliteStorage } from '@earendil-works/pi-durable/storage/sqlite/node';
@@ -27,7 +29,8 @@ export class ExecutionStores {
     this.line = result.catch(() => {});
     return result;
   }
-  private async acquire(taskId: string) {
+  private async acquire(taskId: string, existing=false) {
+    if (!/^[A-Za-z0-9_-]{1,100}$/.test(taskId)) throw new Error('任务运行目录身份不合法');
     const cached = this.stores.get(taskId);
     if (cached) return cached;
     if (this.stores.size >= 8) {
@@ -35,10 +38,17 @@ export class ExecutionStores {
       if (!evict) throw new Error('运行存储缓存没有可释放位置');
       await this.retire(evict);
     }
-    const directory = await this.files.directory(`.silicolab/runs/${taskId}`);
-    const host = await this.create(`${directory}/session.sqlite`, this.options());
+    const path=join(this.files.project,`.silicolab/runs/${taskId}/session.sqlite`);
+    if (existing) {
+      const info=await lstat(path).catch(()=>{throw new Error('已提交任务运行库缺失，不能新建空检查点');});
+      if (!info.isFile() || info.isSymbolicLink() || await realpath(path)!==path) throw new Error('任务运行库路径不符');
+    } else await this.files.directory(`.silicolab/runs/${taskId}`);
+    const host = await this.create(path, this.options());
     try {
-      await host.commit(async (tx) => {
+      if(existing) {
+        const owner=await host.snapshot(ExecutionOwner,BACKGROUND_CONTEXT);
+        if(owner?.taskId!==taskId)throw new Error('运行存储任务身份不符');
+      } else await host.commit(async (tx) => {
         const owner = await tx.doc(ExecutionOwner);
         if (owner.taskId && owner.taskId !== taskId) throw new Error('运行存储任务身份不符');
         owner.taskId = taskId;
@@ -57,6 +67,9 @@ export class ExecutionStores {
   }
   withStore<T>(taskId: string, operation: (host: Harness) => Promise<T>) {
     return this.serial(async () => operation(await this.acquire(taskId)));
+  }
+  withExistingStore<T>(taskId: string, operation: (host: Harness) => Promise<T>) {
+    return this.serial(async () => operation(await this.acquire(taskId,true)));
   }
   private async retire(taskId: string) {
     const host = this.stores.get(taskId);

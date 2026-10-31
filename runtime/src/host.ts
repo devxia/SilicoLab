@@ -139,6 +139,7 @@ async function dispatch(request: Record<string, unknown>) {
       if (typeof request.requestId !== 'string' || !request.requestId || request.requestId.length > 200 || typeof request.goal !== 'string' || !request.goal.trim() || request.goal.length > 100000 || !Array.isArray(request.authorizedTools) || !request.authorizedTools.every((tool) => typeof tool === 'string')) throw new Error('任务目标、身份或授权格式不合法');
       const options: ScienceOptions = { workflow: request.workflow === 'd2p_local' ? 'd2p_local' : request.workflow === 'simulated_external' ? 'simulated_external' : request.workflow === 'protein_factory_remote' ? 'protein_factory_remote' : request.workflow === 'python_analysis' ? 'python_analysis' : request.workflow === 'mcp_tool' ? 'mcp_tool' : 'validation' };
       if (request.workflow && !['validation', 'd2p_local', 'simulated_external', 'protein_factory_remote', 'python_analysis', 'mcp_tool'].includes(String(request.workflow))) throw new Error('未知任务模式');
+      options.executionContract=process.env.SILICOLAB_EXECUTION_CONTRACT;
       if (request.workflow === 'd2p_local') {
         const parameters = request.parameters as Record<string, unknown> | undefined;
         if (!parameters || !['preserve', 'add', 'ask'].includes(String(parameters.stopPolicy)) || typeof parameters.avoid !== 'string' || parameters.avoid.length > 2000 || typeof request.inputVersionId !== 'string') throw new Error('本地专项参数不完整');

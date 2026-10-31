@@ -4,7 +4,7 @@ export type ProjectIndex = { id: string; name: string; path: string };
 export type ImportedFile = { id: string; name: string; path: string; size: number; sha256: string; importedAt: string };
 export type FixedInput = { fileId: string; name: string; source: string; path: string; size: number; sha256: string; version: number; contentBase64?: string };
 export type InputVersion = { id: string; conversationId: string; createdAt: string; inputs: FixedInput[] };
-export type Project = ProjectIndex & { availability?: { status: string; reason?: string; progressSaved: boolean }; conversations: Conversation[]; files: ImportedFile[]; inputVersions: InputVersion[]; tasks: ResearchTask[]; scheduling: string; modelRequests: number };
+export type Project = ProjectIndex & { stateFormat?: number; availability?: { status: string; reason?: string; progressSaved: boolean }; conversations: Conversation[]; files: ImportedFile[]; inputVersions: InputVersion[]; tasks: ResearchTask[]; scheduling: string; modelRequests: number };
 
 export async function request<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
   const response = await fetch(`/api/workbench${path}`, {

@@ -11,6 +11,10 @@
 *.pid
 playwright-report/
 test-results/
+# Project backup archives and transient publication/staging data
+*.zip
+.silicolab-backup-*.tmp
+.silicolab-restore-*/
 
 # Python environments, caches and package metadata
 /.venv/

@@ -26,6 +26,11 @@ class ProjectPath(BaseModel):
     name: str = Field(default='科研项目', min_length=1, max_length=200)
 
 
+class RestoreProject(BaseModel):
+    archivePath: str = Field(min_length=1,max_length=4096)
+    path: str = Field(min_length=1,max_length=4096)
+
+
 class ConversationTitle(BaseModel):
     title: str = Field(min_length=1, max_length=200)
 
@@ -85,6 +90,11 @@ class ProjectHost:
         self.state = self.path / '.silicolab'
         if self.state.is_symlink():
             raise ValueError('项目状态目录不能是符号链接')
+        from silicolab.project_archives import check_format
+        marker=check_format(self.state)
+        self._was_existing=(self.state/'session.sqlite').is_file()
+        if expected_id and marker.get('projectId') and marker['projectId']!=expected_id:raise ValueError('项目版本记录身份不符')
+        expected_id=expected_id or marker.get('projectId')
         if not create and not (self.state / 'session.sqlite').is_file():
             raise ValueError('所选目录没有 SilicoLab 项目')
         self.state.mkdir(mode=0o700, exist_ok=True)
@@ -110,6 +120,8 @@ class ProjectHost:
                 raise ValueError('智能体运行时未安装，请按开发文档安装 runtime 依赖')
             env = {'PATH': os.environ.get('PATH', '/usr/bin:/bin'), 'LANG': 'en_US.UTF-8',
                    'SILICOLAB_PYTHON': sys.executable, 'SILICOLAB_BACKEND': str(Path(__file__).resolve().parent.parent)}
+            from silicolab.project_archives import execution_contract
+            env['SILICOLAB_EXECUTION_CONTRACT']=execution_contract(runtime,Path(__file__).resolve().parent)
             if expected_id:
                 env['SILICOLAB_EXPECTED_PROJECT'] = expected_id
             env['SILICOLAB_SIMULATED_EXECUTOR'] = simulated.url
@@ -239,7 +251,7 @@ class ProjectHost:
     def alive(self):
         return self._process is not None and self._process.poll() is None and self._supervisor is not None and self._supervisor.poll() is None
 
-    def close(self):
+    def close(self,release_lease=True):
         self._monitor_stop.set()
         if self._monitor and self._monitor is not threading.current_thread():
             self._monitor.join(timeout=5)
@@ -263,7 +275,7 @@ class ProjectHost:
                 self._supervisor.wait(timeout=5)
         if self._credentials:
             self._credentials.close()
-        if not self._lease.closed:
+        if release_lease and not self._lease.closed:
             self._lease.close()
 
 
@@ -369,6 +381,9 @@ class Workbench:
                             with self._lock: self._hosts.pop(prior['path'], None)
                     host.call('project.verify')
                     snapshot = host.call('status')
+                    from silicolab.project_archives import check_format,write_format
+                    marker=check_format(host.state) if host._was_existing else write_format(host.state,snapshot['id'])
+                    snapshot['stateFormat']=marker['version']
                     item = {'id': snapshot['id'], 'name': snapshot['name'], 'path': canonical}
                     with self._lock:
                         candidate = [dict(item) if p['id'] == snapshot['id'] else dict(p) for p in self._projects]
@@ -414,12 +429,55 @@ class Workbench:
                     if values.get('authorizedTools') != ['mcp_call']: raise ValueError('MCP来源信任不是任务授权；请明确允许此任务mcp_call')
                     values['mcp'] = self.mcp_resources.resolve(item['path'],values.get('mcpResourceId'),values.get('mcpFingerprint'))
                 result = host.call(op, **values)
+                if op=='status':
+                    from silicolab.project_archives import check_format
+                    result['stateFormat']=check_format(host.state)['version']
                 if op == 'task.pause' and result.get('pausedHost'):
                     host.close()
                     with self._lock: self._hosts.pop(canonical, None)
                     snapshot = self.open(item['path'], expected_id=project_id)
                     return next(task for task in snapshot['tasks'] if task['id'] == values['taskId'])
                 return {**result, 'path': item['path'], 'availability': {'status': 'online', 'progressSaved': True}} if op == 'status' else result
+
+    def backup(self,project_id,path,upgrade=False):
+        from silicolab.project_archives import create_archive,check_format,write_format
+        with self._project_line(project_id):
+            snapshot=self.call(project_id,'status')
+            if snapshot.get('availability',{}).get('status')!='online':raise ValueError('项目离线，不能创建一致备份')
+            if any(t['status'] in ('running','queued','admission_pending','pausing','external_submitting') for t in snapshot['tasks']):raise ValueError('请先明确暂停活动/排队任务，再创建一致备份；备份不自动取消独立远端作业')
+            canonical=snapshot['path']
+            with self._path_line(canonical):
+                with self._lock:host=self._hosts[canonical]
+                host.call('project.verify')
+                host.close(release_lease=False)
+                try:
+                    result=create_archive(host.state,snapshot,path)
+                    if upgrade:
+                        before=check_format(host.state)
+                        if before['version']!=1:raise ValueError('项目已是当前状态版本；备份已保留，无需升级')
+                        result['stateFormat']=write_format(host.state,project_id)['version']
+                        result['upgradedFrom']=before['version']
+                    return result
+                finally:
+                    host._lease.close()
+                    with self._lock:self._hosts.pop(canonical,None)
+
+    def restore(self,archive_path,path):
+        from silicolab.project_archives import unpack_archive
+        target=Path(path).resolve(strict=True)
+        with unpack_archive(archive_path,target) as (stage,manifest):
+            project_id=manifest['projectId']
+            with self._project_line(project_id):
+                with self._path_line(str(target)):
+                    with self._lock:
+                        if any(p['id']==project_id for p in self._projects):raise ValueError('原项目仍有关联；先停止并移除原关联，不能并行打开同身份副本')
+                    host=ProjectHost(stage,False,'恢复项目',self.simulated(),self.model_configuration,[],project_id)
+                    try:host.call('project.verify')
+                    finally:host.close()
+                    if any(target.iterdir()):raise ValueError('恢复目标在核验期间改变，未覆盖')
+                    (stage/'.silicolab').rename(target/'.silicolab')
+                # Keep the UUID lifecycle line through association publication.
+                return self.open(str(target),expected_id=project_id)
 
     def relocate(self, project_id, path):
         with self._project_line(project_id):
@@ -475,6 +533,18 @@ def router(workbench):
     @routes.post('/projects', status_code=201)
     def create_project(body: ProjectPath):
         return invoke(workbench.open, body.path, True, body.name)
+
+    @routes.post('/projects/restore',status_code=201)
+    def restore_project(body: RestoreProject):
+        return invoke(workbench.restore,body.archivePath,body.path)
+
+    @routes.post('/projects/{project_id}/upgrade')
+    def upgrade_project(project_id: str,body: ProjectPath):
+        return invoke(workbench.backup,project_id,body.path,True)
+
+    @routes.post('/projects/{project_id}/backup')
+    def backup_project(project_id: str,body: ProjectPath):
+        return invoke(workbench.backup,project_id,body.path)
 
     @routes.post('/projects/open')
     def open_project(body: ProjectPath):

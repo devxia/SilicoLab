@@ -217,6 +217,17 @@ worker 的网络拒绝钩子只针对可信科学入口，不能代替不可信 
 
 stdio须显式预装已验证runtime，不能将#3Python结果自动推给任意MCP命令。
 
+## 项目状态升级与备份恢复
+
+[#23 项目恢复契约](project-archives.md) 提供一致已提交状态ZIP/哈希清单、明确格式升级与回滚、现有空目录核验恢复，以及执行来源版本不兼容时拒绝混用旧结果。左侧「项目恢复」与API使用同一入口，不导出应用凭据、不自动继续任务。
+
+```bash
+.venv/bin/python -B -m unittest discover -s backend/tests -p test_project_archives.py -v
+.venv/bin/python -B tests/e2e/browser_workbench_archives.py
+```
+
+人工旧版夹具需固定公开提交c6052b4、离线npm缓存及预装分析runtime；仅重开旧记录不构成任意旧版继续执行的许可。
+
 ## 常规检查
 
 ```bash

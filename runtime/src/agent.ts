@@ -19,7 +19,7 @@ const ctx = BACKGROUND_CONTEXT;
 type Artifact = { path: string; sha256: string; size: number; name?: string; mediaType?: string };
 type ExecutionResult = { characters: number; jobId?: string; payloadHash?: string; requestKey?: string; payload?: string; kind?: string } | { name: string; source: string; sha256: string; status: string; characters: number } | ScienceResult;
 type Execution = { inputFingerprint?: string; id: string; toolTaskId: number; callId: string; tool: string; input: string; progress: number; status: string; error?: string; pythonPid?: number; artifact?: Artifact; artifacts?: Artifact[]; result?: ExecutionResult };
-export type ResearchTask = ScienceOptions & { skillLoads?: { name: string; source: string; sha256: string; status: string; path: string }[]; modelRequests?: ModelRequest[]; modelBoundaryError?: string; recoveryRequestId?: string; id: string; conversationId: string; requestId: string; goal: string; status: string; authorizedTools: string[]; createdAt: string; submissionId?: SubmissionId; toolExecutions: Execution[]; error?: string; pauseReason?: string; externalJob?: ExternalJob; retryRemoteApproved?: string; remoteAttempts?: { id: string; status: string; reason?: string; createdAt: string; reconciledAt?: string; queryAvailable?: boolean }[]; isolatedExecution?: boolean; queuedAt?: string; startedAt?: string; finishedAt?: string; decisions?: TaskDecision[]; admission?: { authorizedTools: string[]; options: ScienceOptions }; preflight?: { missingStopNames: string[]; inputVersionId: string } };
+export type ResearchTask = ScienceOptions & { submissionRequestId?: string; skillLoads?: { name: string; source: string; sha256: string; status: string; path: string }[]; modelRequests?: ModelRequest[]; modelBoundaryError?: string; recoveryRequestId?: string; id: string; conversationId: string; requestId: string; goal: string; status: string; authorizedTools: string[]; createdAt: string; submissionId?: SubmissionId; toolExecutions: Execution[]; error?: string; pauseReason?: string; externalJob?: ExternalJob; retryRemoteApproved?: string; remoteAttempts?: { id: string; status: string; reason?: string; createdAt: string; reconciledAt?: string; queryAvailable?: boolean }[]; isolatedExecution?: boolean; queuedAt?: string; startedAt?: string; finishedAt?: string; decisions?: TaskDecision[]; admission?: { authorizedTools: string[]; options: ScienceOptions }; preflight?: { missingStopNames: string[]; inputVersionId: string } };
 const Ledger = defineDoc<{ tasks: ResearchTask[]; modelRequests: number; queue?: string[] }>({
   kind: 'silicolab.tasks', version: 1, scope: 'session', initial: () => ({ tasks: [], modelRequests: 0 }), checkpointWhen: () => true,
 });
@@ -114,8 +114,9 @@ export function createLocalAgent(directory: string, getInputs: (id: string, conv
     const live = await api.snapshot(LiveDoc, api.conversationId, ctx);
     if (live?.run?.inputs.length !== 1) throw new Error('工具无法关联唯一内核输入');
     const task = await taskForSubmission(api.conversationId, live.run.inputs[0]);
+    checkExecutionContract(task);
     if (tool !== 'read_skill' && !task.authorizedTools.includes(tool)) throw new Error('需要用户决定：当前任务未授权所需工具');
-    const inputFingerprint = createHash('sha256').update(JSON.stringify({ tool, parameters, inputVersionId: task.inputVersionId, science: task.parameters })).digest('hex');
+    const inputFingerprint = createHash('sha256').update(JSON.stringify({ tool, parameters, inputVersionId: task.inputVersionId, science: task.parameters, executionContract: task.executionContract })).digest('hex');
     const completed = task.toolExecutions.find((execution) => execution.status === 'completed' && execution.tool === tool && (execution.toolTaskId === api.taskId || execution.inputFingerprint === inputFingerprint));
     if (completed?.result) {
       await verifyCompleted(completed, '完成步骤产物完整性不符，需先核对');
@@ -453,9 +454,15 @@ export function createLocalAgent(directory: string, getInputs: (id: string, conv
   }
   async function kernelFor(task: ResearchTask) { return task.isolatedExecution ? executions.openPinned(task.id) : harness; }
   function borrowKernel<T>(task: ResearchTask, operation: (kernel: Harness) => Promise<T>): Promise<T> {
-    return task.isolatedExecution ? executions.withStore(task.id, operation) : operation(harness);
+    return task.isolatedExecution ? task.submissionId!==undefined ? executions.withExistingStore(task.id, operation) : executions.withStore(task.id, operation) : operation(harness);
+  }
+  function checkExecutionContract(task: ResearchTask) {
+    if (!task.executionContract || task.executionContract !== process.env.SILICOLAB_EXECUTION_CONTRACT) throw new Error('工具/脚本环境版本改变或旧版本来源不明；已完成记录可查看，请明确创建新任务，不能混用旧结果恢复');
   }
   async function enqueue(taskId: string) {
+    const candidate=(await tasks()).find(task=>task.id===taskId);
+    if(!candidate)throw new Error('任务不存在');
+    checkExecutionContract(candidate);
     await harness.commit(async (tx) => {
       const ledger = await tx.doc(Ledger);
       const task = ledger.tasks.find((task) => task.id === taskId)!;
@@ -484,6 +491,7 @@ export function createLocalAgent(directory: string, getInputs: (id: string, conv
   }
   async function launch(task: ResearchTask) {
     files.check();
+    checkExecutionContract(task);
     if (task.workflow === 'protein_factory_remote') {
       const controller = new AbortController();
       const done = runRemote(task, controller.signal).catch(async (error) => {
@@ -523,7 +531,7 @@ export function createLocalAgent(directory: string, getInputs: (id: string, conv
       : await conversation.submit({ type: 'input', requestId: admissionRequestId, content: task.goal, whenBusy: 'reject' }, ctx);
     await harness.commit(async (tx) => {
       const saved = (await tx.doc(Ledger)).tasks.find((item) => item.id === task.id)!;
-      saved.submissionId = submission.id; saved.status = 'running'; saved.startedAt = new Date().toISOString();
+      saved.submissionId = submission.id; saved.submissionRequestId = admissionRequestId; saved.status = 'running'; saved.startedAt = new Date().toISOString();
     }, ctx);
     void submission.wait(ctx).then(async (settled) => {
       await harness.commit(async (tx) => {
@@ -539,8 +547,21 @@ export function createLocalAgent(directory: string, getInputs: (id: string, conv
     }).catch(() => { /* Opening never resumes pending work. */ });
     return { ...task, submissionId: submission.id, status: 'running' };
   }
+  async function verifyCheckpoints() {
+    for (const task of await tasks()) if (task.submissionId!==undefined) {
+      await borrowKernel(task,async kernel=>{
+        const id=task.isolatedExecution ? (await kernel.root(ctx)).id : Number(task.conversationId) as ConversationId;
+        const submission=await kernel.submission(task.submissionId!,ctx);
+        const submitted=await submission?.status(ctx);
+        const requests=task.submissionRequestId ? [task.submissionRequestId] : [task.requestId,...(task.recoveryRequestId?[task.recoveryRequestId]:[])];
+        if(!submitted || submitted.conversationId!==id || !requests.includes(submitted.requestId!))throw new Error('任务检查点submission关联不符；不能恢复缺失历史');
+      });
+    }
+  }
   async function reconcileOpen() {
     const saved = await tasks();
+    if (saved.some(task => typeof task.id !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(task.id)) || new Set(saved.map(task=>task.id)).size !== saved.length) throw new Error('项目任务UUID损坏；未打开任务路径或执行恢复');
+    await verifyCheckpoints();
     const changes: { id: string; status: string; reason?: string }[] = [];
     for (const task of saved) {
       if (task.workflow === 'protein_factory_remote' && task.status === 'running' && task.remoteAttempts?.some((attempt) => attempt.status === 'submitting')) {
@@ -557,8 +578,8 @@ export function createLocalAgent(directory: string, getInputs: (id: string, conv
         continue;
       }
       const submitted = await borrowKernel(task, async (kernel) => {
-        const conversationId = task.isolatedExecution ? (await kernel.root(ctx)).id : Number(task.conversationId) as ConversationId;
-        return kernel.commit((tx) => tx.submissionByRequest(conversationId, task.recoveryRequestId || task.requestId), ctx);
+        const submission=task.submissionId!==undefined ? await kernel.submission(task.submissionId,ctx) : undefined;
+        return submission?.status(ctx);
       });
       changes.push({ id: task.id, status: submitted?.status === 'done' ? 'answered' : 'paused',
         reason: task.status === 'pausing' ? '用户暂停；本机执行已停止' : '宿主中断或退出；等待明确恢复' });
@@ -618,6 +639,7 @@ export function createLocalAgent(directory: string, getInputs: (id: string, conv
     const task = (await tasks()).find((task) => task.id === taskId);
     if (!task) throw new Error('任务不存在');
     if (task.status !== 'paused') return task;
+    checkExecutionContract(task);
     if (task.workflow === 'protein_factory_remote') return !task.remoteAttempts?.length || task.retryRemoteApproved === task.remoteAttempts.at(-1)?.id ? enqueue(task.id) : reconcileScience(taskId);
     if (task.workflow === 'simulated_external') return task.externalJob?.state === 'not_submitted' ? enqueue(task.id) : reconcileExternal(taskId);
     if (task.pauseReason?.startsWith('模型请求失败')) {
@@ -771,6 +793,7 @@ export function createLocalAgent(directory: string, getInputs: (id: string, conv
       const response=await runScience({workflow:'mcp_tool',operation:'list',mcp},undefined,async()=>{});return response.result;
     },
     async verifyProject() {
+      await verifyCheckpoints();
       for (const task of await tasks()) {
         if (task.inputVersionId) await getInputs(task.inputVersionId, task.conversationId);
         for (const execution of task.toolExecutions) if (execution.artifacts?.length || execution.artifact) await verifyCompleted(execution, '项目产物完整性不符，不能重新定位恢复');

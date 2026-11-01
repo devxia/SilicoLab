@@ -15,7 +15,9 @@
 
 这些是本机有限次测量，受缓存和负载影响；RSS 不是物理 footprint，也不应直接累加 WebKit 共享映射。原始报告保留更多方法细节。
 
-从根目录复测（均使用人工数据，不修改个人历史）：
+0.2.0最终公开CPython安装包在同一机器完成3次新测量：启动窗口与独立后台中位1.490秒，关窗退出GUI中位0.350秒，稳定后GUI约98.5MiB RSS、后台约61MiB，CPU约0.3–0.9%。相较旧单进程手动版，增加独立后台握手及退出确认；未观察到持续空闲高占用。结果限本机3次，RSS仍不是物理footprint；[分发矩阵](distribution-acceptance.md)记录完整方法和边界。
+
+从根目录复测（均使用人工数据，不修改个人历史）。旧工具保留历史测量用途；0.2.0使用`tests/e2e/packaged_performance.py --app release/SilicoLab.app --output outputs/packaged/performance.json`检查新版独立后台生命周期：
 
 ```bash
 .desktop-venv/bin/python tools/benchmarks/perf_desktop.py --output outputs/perf-native.json --runs 3 --assert-close-below 0.8

@@ -24,11 +24,11 @@ def browser_database() -> Path:
 
 
 def frontend_directory() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(sys._MEIPASS) / "frontend" / "dist"
     override = os.environ.get("SILICOLAB_FRONTEND_DIST")
     if override:
         return Path(override).expanduser().resolve()
-    if getattr(sys, "frozen", False):
-        return Path(sys._MEIPASS) / "frontend" / "dist"
     return project_directory() / "frontend" / "dist"
 
 

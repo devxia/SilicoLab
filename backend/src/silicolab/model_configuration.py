@@ -199,8 +199,8 @@ class ModelConfiguration:
         import shutil
         import subprocess
         configuration = self.resolve(identity)
-        runtime = Path(os.environ.get('SILICOLAB_RUNTIME', Path(__file__).resolve().parents[3] / 'runtime'))
-        node = os.environ.get('SILICOLAB_NODE') or shutil.which('node')
+        from silicolab.bundled_runtime import node_runtime
+        runtime,node=node_runtime()
         if not node:
             raise ValueError('模型运行时未安装')
         try:

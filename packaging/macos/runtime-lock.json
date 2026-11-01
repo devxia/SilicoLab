@@ -1,0 +1,11 @@
+{
+  "node": {
+    "version": "24.16.0",
+    "architecture": "darwin-x64",
+    "url": "https://nodejs.org/dist/v24.16.0/node-v24.16.0-darwin-x64.tar.gz",
+    "sha256": "298b4c7b3cb80765c8703e42b90324a4ece3b6634947b89e769c3c980ab55185"
+  },
+  "minimumMacOS": "13.0",
+  "signing": "ad-hoc; no Developer ID or notarization",
+  "analysisRuntimeLock": "tools/python-runtime/runtime-lock.json"
+}

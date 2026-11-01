@@ -5,6 +5,7 @@ import hashlib
 import json
 from pathlib import Path
 import sqlite3
+from socketserver import TCPServer
 import threading
 import time
 from urllib.parse import parse_qs, urlparse
@@ -71,7 +72,13 @@ class SimulatedExecutor:
                         self.reply(404, {'error': 'unsupported simulated operation'})
                 except (ValueError, KeyError, OSError, sqlite3.Error) as error:
                     self.reply(400 if isinstance(error, (ValueError, KeyError)) else 503, {'error': str(error)})
-        self.server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        class LoopbackServer(ThreadingHTTPServer):
+            def server_bind(self):
+                # HTTPServer's default calls getfqdn and can block on DNS, despite
+                # this being an exclusively local service with no hostname use.
+                TCPServer.server_bind(self)
+                self.server_name='127.0.0.1';self.server_port=self.server_address[1]
+        self.server = LoopbackServer(('127.0.0.1', 0), Handler)
         self.server.daemon_threads = True
         self.url = 'http://127.0.0.1:' + str(self.server.server_address[1])
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)

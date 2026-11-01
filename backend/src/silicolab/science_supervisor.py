@@ -55,9 +55,8 @@ def main(channel_fd=None):
                     for key in ('SILICOLAB_SCIENCE_REMOTE', 'SILICOLAB_SCIENCE_REMOTE_TIMEOUT'):
                         if os.environ.get(key):
                             env[key] = os.environ[key]
-                process = subprocess.Popen([sys.executable, '-I', '-B', '-c',
-                                            f'import sys;sys.path.insert(0,sys.argv[1]);from silicolab.{module} import main;main()',
-                                            str(Path(__file__).resolve().parent.parent)],
+                from silicolab.bundled_runtime import worker_command
+                process = subprocess.Popen(worker_command(module),
                                            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                            close_fds=True, env=env)
                 jobs[identity]['process'] = process

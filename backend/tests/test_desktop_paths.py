@@ -41,7 +41,7 @@ class DesktopPathTests(unittest.TestCase):
 
     def test_product_identity_and_version_are_consistent(self):
         self.assertEqual(APP_NAME, 'SilicoLab')
-        self.assertEqual(APP_VERSION, '0.1.3')
+        self.assertEqual(APP_VERSION, '0.2.0')
         self.assertEqual(SERVICE_ID, 'silicolab')
         self.assertEqual(MACOS_BUNDLE_ID, 'com.silicolab.desktop')
         self.assertEqual(DATABASE_FILENAME, 'silicolab.sqlite3')

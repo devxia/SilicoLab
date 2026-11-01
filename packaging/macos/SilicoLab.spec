@@ -1,7 +1,7 @@
 # Build from the project root with packaging/macos/build.sh.
 from pathlib import Path
 import sys
-from PyInstaller.utils.hooks import collect_data_files
+from PyInstaller.utils.hooks import collect_data_files, copy_metadata
 
 root = Path(SPECPATH).parents[1]
 backend_src = root / 'backend' / 'src'
@@ -13,10 +13,13 @@ datas = [(str(root / 'frontend' / 'dist'), 'frontend/dist'),
          (str(backend_src / 'silicolab/features/codon/local.py'), 'silicolab/features/codon')]
 datas += collect_data_files('silicolab', includes=['features/codon/resources/*'])
 datas += collect_data_files('certifi')
+for distribution in ('openpyxl','et-xmlfile','httpx','fastapi','uvicorn'):
+    datas += copy_metadata(distribution)
 a = Analysis([str(root / 'packaging/macos/desktop-entry.py')], pathex=[str(backend_src)], datas=datas,
              hiddenimports=['webview.platforms.cocoa', 'uvicorn.logging', 'uvicorn.loops.asyncio',
                             'uvicorn.protocols.http.h11_impl', 'uvicorn.lifespan.on', 'certifi',
-                            'silicolab.features.codon.local'],
+                            'silicolab.features.codon.local', 'silicolab.science_supervisor', 'silicolab.science_worker',
+                            'silicolab.remote_science_worker', 'silicolab.analysis_execution', 'silicolab.mcp_execution'],
              excludes=['tkinter', 'PyQt5', 'PyQt6', 'PySide2', 'PySide6', 'gtk', 'gi',
                        'webview.platforms.qt', 'webview.platforms.gtk', 'webview.platforms.winforms',
                        'IPython', 'pytest', 'pandas', 'numpy', 'matplotlib', 'scipy'],

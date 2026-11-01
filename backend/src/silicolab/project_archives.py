@@ -57,7 +57,7 @@ def execution_contract(runtime,backend):
     sources += [('runtime/package-lock.json',runtime/'package-lock.json')]
     lock=runtime.parent/'tools/python-runtime/runtime-lock.json'
     if lock.is_file():sources.append(('analysis/runtime-lock.json',lock))
-    inventory=runtime.parent/'release/PythonBoundaryProbe-manifest.json'
+    inventory=runtime.parent/('analysis' if getattr(sys,'frozen',False) else 'release')/'PythonBoundaryProbe-manifest.json'
     if inventory.is_file():sources.append(('analysis/runtime-inventory.json',inventory))
     for name,path in sources:identities[name]=hashlib.sha256(read_regular(path,MAX_FILE)).hexdigest()
     return hashlib.sha256(json.dumps(identities,sort_keys=True).encode()).hexdigest()

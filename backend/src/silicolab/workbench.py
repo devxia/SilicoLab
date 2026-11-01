@@ -124,14 +124,13 @@ class ProjectHost:
         self._next = 0
         try:
             fcntl.flock(self._lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            runtime = Path(os.environ.get('SILICOLAB_RUNTIME', Path(__file__).resolve().parents[3] / 'runtime'))
-            node = os.environ.get('SILICOLAB_NODE') or shutil.which('node')
+            from silicolab.bundled_runtime import node_runtime,backend_sources,worker_command
+            runtime,node=node_runtime()
             if not node or not (runtime / 'node_modules/@earendil-works/pi-durable/package.json').is_file():
                 raise ValueError('智能体运行时未安装，请按开发文档安装 runtime 依赖')
-            env = {'PATH': os.environ.get('PATH', '/usr/bin:/bin'), 'LANG': 'en_US.UTF-8',
-                   'SILICOLAB_PYTHON': sys.executable, 'SILICOLAB_BACKEND': str(Path(__file__).resolve().parent.parent)}
+            env = {'PATH': '/usr/bin:/bin', 'LANG': 'en_US.UTF-8'}
             from silicolab.project_archives import execution_contract
-            env['SILICOLAB_EXECUTION_CONTRACT']=execution_contract(runtime,Path(__file__).resolve().parent)
+            env['SILICOLAB_EXECUTION_CONTRACT']=execution_contract(runtime,backend_sources())
             if expected_id:
                 env['SILICOLAB_EXPECTED_PROJECT'] = expected_id
             env['SILICOLAB_SIMULATED_EXECUTOR'] = simulated.url
@@ -153,9 +152,7 @@ class ProjectHost:
                     science_env[key] = os.environ[key]
             node_channel, supervisor_channel = socket.socketpair()
             try:
-                self._supervisor = subprocess.Popen([sys.executable, '-I', '-B', '-c',
-                                                     'import sys;sys.path.insert(0,sys.argv[1]);from silicolab.science_supervisor import main;main(int(sys.argv[2]))',
-                                                     str(Path(__file__).resolve().parent.parent), str(supervisor_channel.fileno())],
+                self._supervisor = subprocess.Popen(worker_command('science_supervisor',supervisor_channel.fileno()),
                                                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                                     env=science_env, close_fds=True,
                                                     pass_fds=(supervisor_channel.fileno(),))
